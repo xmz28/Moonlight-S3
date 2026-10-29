@@ -1,0 +1,5 @@
+.pio/
+.vscode/
+include/config_secrets.h
+CONNECTION.txt
+__pycache__/

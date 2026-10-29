@@ -1,0 +1,45 @@
+"""Offline artifact checks. Never opens a serial port or flashes a device."""
+import hashlib
+import json
+from pathlib import Path
+import re
+import struct
+
+root=Path(__file__).resolve().parents[1]
+build=root/".pio/build/moonlight_s3"
+host=Path(r"C:\Users\10145294\Documents\MySoftware\Moonlight_S3_Host")
+app=(build/"firmware.bin").read_bytes()
+factory=(build/"firmware.factory.bin").read_bytes()
+boot=(build/"bootloader.bin").read_bytes()
+parts=(build/"partitions.bin").read_bytes()
+for name,image in (("app",app),("bootloader",boot)):
+    assert image[0]==0xe9, (name,"bad image magic")
+    assert image[2]==2, (name,"Flash mode must be DIO")
+    assert image[3]>>4==4, (name,"Flash size must be 16 MB")
+    assert struct.unpack_from("<H",image,12)[0]==9, (name,"image must target ESP32-S3")
+partitions=[]
+for offset in range(0,len(parts),32):
+    entry=parts[offset:offset+32]
+    if len(entry)<32 or entry[:2]!=b"\xaa\x50": continue
+    magic,kind,subtype,start,size,label,flags=struct.unpack("<HBBII16sI",entry)
+    label=label.split(b"\0")[0].decode()
+    assert start+size<=16*1024*1024
+    partitions.append(dict(name=label,type=kind,subtype=subtype,offset=start,size=size))
+application=next(p for p in partitions if p["type"]==0)
+assert application["offset"]==0x10000 and len(app)<=application["size"]
+assert factory[:len(boot)]==boot
+assert factory[0x8000:0x8000+len(parts)]==parts
+assert factory[0x10000:0x10000+len(app)]==app
+token=re.search(r'"([0-9a-f]{32})"',(root/"include/config_secrets.h").read_text()).group(1)
+for config in (host/"settings.json",host/"dist/MoonlightS3Host/settings.json"):
+    assert json.loads(config.read_text(encoding="utf-8"))["token"]==token
+manifest={"target":"ESP32-S3-N16R8","flash_mode":"DIO","flash_bytes":16*1024*1024,
+          "application_partition_bytes":application["size"],"partitions":partitions,"artifacts":{}}
+for name in ("firmware.bin","firmware.factory.bin","bootloader.bin","partitions.bin"):
+    data=(build/name).read_bytes()
+    manifest["artifacts"][name]={"bytes":len(data),"sha256":hashlib.sha256(data).hexdigest()}
+(build/"artifact-manifest.json").write_text(json.dumps(manifest,indent=2)+"\n")
+print("PASS: ESP32-S3 chip ID, 16 MB DIO headers, partition bounds, combined image contents.")
+print("PASS: firmware / host source / packaged host pairing tokens match.")
+print(f"App bytes: {len(app)} / {application['size']}; factory bytes: {len(factory)}")
+print("Manifest:",build/"artifact-manifest.json")
