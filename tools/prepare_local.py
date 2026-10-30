@@ -17,7 +17,7 @@ else:
     token = secret.read_text().split('"')[1]
 settings = host / "settings.json"
 if not settings.exists():
-    settings.write_text(json.dumps(dict(host="192.168.4.1", port=47989, token=token,
+    settings.write_text(json.dumps(dict(host="", port=47989, token=token,
         monitor=1, quality=60, fps=25, resolution="400x240", control=True, toolbar=True), indent=2))
 font = ImageFont.load_default(size=12)
 rows = []

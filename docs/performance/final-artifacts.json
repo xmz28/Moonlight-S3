@@ -1,0 +1,51 @@
+{
+  "target": "ESP32-S3-N16R8",
+  "flash_mode": "DIO",
+  "flash_bytes": 16777216,
+  "application_partition_bytes": 6291456,
+  "partitions": [
+    {
+      "name": "nvs",
+      "type": 1,
+      "subtype": 2,
+      "offset": 36864,
+      "size": 20480
+    },
+    {
+      "name": "phy_init",
+      "type": 1,
+      "subtype": 1,
+      "offset": 57344,
+      "size": 4096
+    },
+    {
+      "name": "factory",
+      "type": 0,
+      "subtype": 0,
+      "offset": 65536,
+      "size": 6291456
+    }
+  ],
+  "artifacts": {
+    "firmware.bin": {
+      "bytes": 1165856,
+      "sha256": "a5dab5011020b5d0242aed3f0d83408c676c19b99e8601f37db6dbb3a76fba5d"
+    },
+    "firmware.factory.bin": {
+      "bytes": 1231392,
+      "sha256": "a62051f8161ba346bffec30a0ab470ccd1aaabf855696cd931a352d9d7a151bd"
+    },
+    "bootloader.bin": {
+      "bytes": 18720,
+      "sha256": "15f88ae11793eddc5b7e1f770fba54b10a6f59809c14d7c51cfbf0db8d2fa3ca"
+    },
+    "partitions.bin": {
+      "bytes": 3072,
+      "sha256": "8b6ea6efeedea1c62cb8b22b8237df79d476821d2886062f2892ff0f1aae4e03"
+    }
+  },
+  "host_exe": {
+    "bytes": 5924943,
+    "sha256": "c0b6f7df9a9e6fa304936f61b831107b9bce5b8fcfcf7b6856cc30ce1a040503"
+  }
+}

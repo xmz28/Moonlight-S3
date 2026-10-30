@@ -16,7 +16,7 @@ GT911 触摸通过同一连接回传，由电脑调用 Windows SendInput。
 
 以现有 **LVGL-S3** 的 `src/main.cpp` 为依据，默认硬件为 **ESP32-S3-N16R8**：
 240 MHz 双核，16 MB Flash，8 MB OPI PSRAM，800×480 并行 RGB565，GT911。
-新项目没有实际读到设备，以上是参考工程配置；烧录前核对是否仍是同一块板。
+已通过 COM17 实测并烧录 ESP32-S3 rev 0.2、16 MB Flash、8 MB PSRAM，GT911 地址 0x5D。
 
 | 信号 | GPIO |
 |---|---|
@@ -31,45 +31,53 @@ GT911 复位脚参考工程未配置，本项目不猜测额外接线。GPIO42 �
 RGB 时序沿用 LVGL-S3 Wi-Fi 档：12 MHz PCLK，水平 48/40/8，垂直 2/40/6，负沿采样。
 理论扫描频率约 `12000000 / (896 * 528) = 25.36 Hz`。
 
-## 第一次运行（本次尚未烧录）
+## 第一次运行
 
-1. 未来烧录此固件后，S3 默认建立 `Moonlight-S3` 热点，密码 `MoonlightS3`。
-2. 电脑连接该热点，打开电脑端 `dist\MoonlightS3Host\MoonlightS3Host.exe`。
-3. 默认 IP `192.168.4.1`，端口 `47989`；本机生成的配对码已经写入两端配置。
+1. 烧录此固件后，S3 只以 STA 模式连接局域网 Wi-Fi，**任何情况下都不创建热点**。
+2. 打开电脑端 `dist\MoonlightS3Host\MoonlightS3Host.exe`，点击“首次配置 S3 Wi-Fi（USB）”，
+   选择 S3 的串口并填写路由器的 **2.4 GHz** Wi-Fi。工具先识别固件，再把配置保存到 NVS；
+   保存后 S3 重启，之后独立联网，无需保持 USB 连接。这一步不会烧录固件。
+3. 电脑通过网线或 Wi-Fi 接入同一局域网。点击“搜索局域网”，从列表明确选择设备。
+   IP 和 TCP 端口自动填入；本机配对码已配置在两端，开始串流时验证。
 4. 选择显示器，初始用 **400×240 / 25 FPS / 质量60**，点“开始串流”。
 5. 在屏幕底部选择 LEFT / RIGHT / SCROLL / KEYBOARD，再在桌面区域操作。
    LEFT/RIGHT 模式按住移动会拖动；SCROLL 模式上下划动发滚轮。
    KEYBOARD 在 Windows 上启动系统屏幕键盘，其启动成功与否取决于系统组件及权限。
 6. 电脑端“停止 / 释放鼠标”停止连接。断线或触摸心跳消失会自动释放按键。
 
-也可以在 `include/config.h` 中填写 `WifiSsid`、`WifiPassword`，让 S3 加入现有 **2.4 GHz** 路由器。
-开机 15 秒内连接失败则退回热点。成功后的 IP 显示在屏幕和串口上，在电脑端填写这个 IP。
-STA 模式自动重连；如果 DHCP 地址发生变化，以路由器租约为准，建议地址保留。
-如果电脑要同时上互联网，可用以太网联网或采用 STA 模式。
+也可以在本地忽略文件 `include/config_secrets.h` 中定义 `MOONLIGHT_WIFI_SSID` 和
+`MOONLIGHT_WIFI_PASSWORD`，再编译；板内通过 USB 保存的配置优先。
+未配置时停留在等待配网页面；连接失败每15秒重试，并保留 USB 配网入口，不回退热点。
+DHCP 地址变化会重新建立 TCP 监听与发现服务，空闲屏幕显示新IP；电脑端重新搜索即可。
+没有搜索结果时，可以手动填写屏幕上的IP，或 `moonlight-s3-xxxxxx.local`（依赖电脑的mDNS支持）。
+局域网广播使用 UDP47990，串流使用 TCP47989；跨VLAN、访客网络客户端隔离或防火墙拦截可能阻止发现。
+电脑可连接路由器的5GHz Wi-Fi或有线网络，只需与S3的2.4GHz网络互通。
 
 配对码在 `include/config_secrets.h` 和电脑端 `settings.json`，这些文件不纳入 Git。
 重建时可以运行 `python tools\prepare_local.py` 生成缺失配置；不会覆盖已有配对码。
 已有电脑配置与固件不匹配时，手动同步配对码。连接使用明文应用协议，只在可信网络内使用。
-首次运行不自动开防火墙规则，电脑是主动连接方。
+程序不自动修改防火墙。发现使用广播查询和单播回复，电脑是串流的主动连接方。
+USB配网密码不回显、不写入电脑设置文件；NVS存储未开启Flash加密。打开串口时某些USB驱动可能产生复位脉冲。
 
 ## 画质、帧率和延迟
 
 | 档位 | 接收端处理 | 用途 |
 |---|---|---|
-| 800×480 | JPEG 原生解码到背面 RGB 缓冲 | 字体清晰优先 |
-| 400×240 | JPEG 解码到小缓冲，2 倍最近邻放大 | 流畅优先，争取 20–25 FPS |
+| 800×480 | JPEG 分块解码到内部 SRAM，再拷贝到背面 RGB 缓冲 | 字体清晰优先 |
+| 400×240 | 内部 SRAM 分块解码，2 倍最近邻放大 | 流畅优先，争取 20–25 FPS |
 
-**未进行本项目实机帧率测试，20 多帧是目标，不是已验证结果。**
+已完成投屏和触摸反控实测。初始版本为约6/5 FPS；2026-10-30优化后400×240平均22.71 FPS、800×480平均11.69 FPS，均零解码错误。分阶段记录及适用范围见 `docs/PERFORMANCE.md`。
 乐鑫 esp_new_jpeg 1.0.2 公布的 S3、RGB565_LE、quality60、4:2:0 的 800×480
 纯解码参考值为 16.87 FPS；网络、PSRAM、RGB 扫描还会影响端到端结果。
-400×240 档减少解码像素，但有放大开销，需实机测量。
+400×240 档减少解码像素，但有放大开销。当前使用三个 RGB 帧缓冲，让 core 1 解码/放大与 core 0 屏幕提交等待重叠。
+像素块使用 25,600 bytes 内部 SRAM，整帧像素只在准备完成时连续写入 PSRAM。
 
 电脑端显示的是帧确认统计：ACK 在解码完成且 LCD framebuffer 可复用回调之后发送。
 解码耗时包含 JPEG 头解析；“显示处理”还包括放大/提交/同步等待；
 “帧确认”从发送前到收到 ACK，不能当作触摸到画面的总延迟。
 30 FPS 设置不会让 12 MHz 时序的面板超过约25 Hz。
 
-最多两帧在途，电脑只有拿到空位才抓取最新屏幕，不累积截图队列。
+默认流畅优先最多三帧在途；关闭该选项后最多两帧。电脑只有拿到空位才抓取最新屏幕，不累积截图队列。
 TCP 在差网络下仍有重传排队；超时 3 秒断开，不承诺固定低延迟。
 固件网络任务在 core0，解码任务在 core1。两个 256 KiB JPEG 缓冲、两个 RGB 缓冲和小图缓冲均使用 PSRAM。
 LCD 同步异常时停止复用缓冲并返回错误，需重启排查，避免继续破坏扫描数据。
@@ -103,7 +111,7 @@ LCD 同步异常时停止复用缓冲并返回错误，需重启排查，避免�
 - bleconnect 的 `YadeaOtaClient.sendImagePackets`：参考 JPEG 分帧与 CRC 思路。
   本项目不复用车辆握手、固定车辆身份、BLE 或 Android UDP 8889 报文。
 - 新协议详见 `docs/PROTOCOL.md`。
-- 主机测试涵盖 wire layout、CRC、JPEG 格式、TCP 拆包、两帧流控、坐标映射、工具栏和失联松键。
+- 主机测试涵盖 wire layout、CRC、JPEG 格式、TCP 拆包、两/三帧流控、坐标映射、工具栏和失联松键。
   使用 loopback 模拟接收端和虚拟鼠标，不代表真实 S3 解码或实际 Windows 点击已经验证。
 - 未烧录，未验证屏幕颜色/撕裂、触摸轴向、Wi-Fi 吞吐、实际 FPS 或端到端延迟。
 
@@ -111,3 +119,5 @@ LCD 同步异常时停止复用缓冲并返回错误，需重启排查，避免�
 - https://components.espressif.com/components/espressif/esp_new_jpeg/versions/1.0.2/readme
 - https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput
 - https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-mouseinput
+- https://docs.espressif.com/projects/arduino-esp32/en/latest/api/wifi.html
+- https://pyserial.readthedocs.io/en/latest/pyserial_api.html

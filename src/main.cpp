@@ -6,23 +6,28 @@
 #include "config.h"
 #include "display.h"
 #include "touch.h"
+#include "lan.h"
 
 #if !CONFIG_IDF_TARGET_ESP32S3
 #error This firmware requires ESP32-S3
 #endif
 
-// Only the Arduino loop owns the socket. The decoder owns the LCD.
+// Arduino owns the socket, core 1 decodes, core 0 presents completed RGB buffers.
 struct Slot { uint8_t *data; uint32_t length, sequence, crc, generation; };
 struct Result { uint32_t sequence, decodeUs, totalUs, generation; bool ok; };
+struct RenderJob { display::Frame frame; Result result; };
 static Slot slots[2];
-static QueueHandle_t freeSlots, readySlots, results;
+static QueueHandle_t freeSlots, readySlots, results, renderJobs;
 static WiFiServer server(config::Port);
 static WiFiClient client;
 static uint8_t header[36];
 static size_t have, received;
 static int receiving=-1;
 static bool authenticated, touchArmed;
-static uint32_t generation, lastRx, lastTouch, lastPrint, shown, errors;
+static uint32_t generation, lastRx, lastTouch, lastTouchSent, lastPrint, shown, errors;
+static uint16_t touchX, touchY;
+static bool touchDown;
+static bool networkNotice=true;
 
 static uint32_t be32(const uint8_t *p) {
   return uint32_t(p[0])<<24 | uint32_t(p[1])<<16 | uint32_t(p[2])<<8 | p[3];
@@ -45,13 +50,29 @@ static void decodeTask(void *) {
   for (;;) {
     if (xQueueReceive(readySlots,&index,portMAX_DELAY)!=pdTRUE) continue;
     Slot &s=slots[index];
-    Result r={s.sequence,0,0,s.generation,false};
+    RenderJob job={};
+    Result &r=job.result;
+    r={s.sequence,0,0,s.generation,false};
     if (esp_rom_crc32_le(0,s.data,s.length)==s.crc)
-      r.ok=display::present(s.data,s.length,r.decodeUs,r.totalUs);
+      r.ok=display::prepare(s.data,s.length,job.frame);
+    r.decodeUs=job.frame.decodeUs;
     if (!r.ok) Serial.printf("Frame %lu rejected: CRC, JPEG format or LCD synchronization\n",s.sequence);
-    // Copy result before releasing the slot; the receiver may immediately reuse it.
-    xQueueSend(results,&r,portMAX_DELAY);
+    if (r.ok) xQueueSend(renderJobs,&job,portMAX_DELAY);
+    else {
+      display::discard(job.frame);
+      xQueueSend(results,&r,portMAX_DELAY);
+    }
+    // Presenter owns an RGB buffer; compressed bytes can now be reused.
     xQueueSend(freeSlots,&index,portMAX_DELAY);
+  }
+}
+static void renderTask(void *) {
+  RenderJob job;
+  for (;;) {
+    if (xQueueReceive(renderJobs,&job,portMAX_DELAY)!=pdTRUE) continue;
+    job.result.ok=display::present(job.frame,job.result.totalUs);
+    // ACK only after the real LCD buffer switch has completed.
+    xQueueSend(results,&job.result,portMAX_DELAY);
   }
 }
 static void fail(const char *message) {
@@ -66,40 +87,36 @@ void setup() {
   touch::begin();
   freeSlots=xQueueCreate(2,sizeof(int)); readySlots=xQueueCreate(2,sizeof(int));
   results=xQueueCreate(4,sizeof(Result));
-  if (!freeSlots || !readySlots || !results) fail("Queue allocation failed");
+  renderJobs=xQueueCreate(2,sizeof(RenderJob));
+  if (!freeSlots || !readySlots || !results || !renderJobs) fail("Queue allocation failed");
   for (int i=0;i<2;++i) {
     slots[i].data=static_cast<uint8_t *>(heap_caps_malloc(config::MaxJpeg,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
     if (!slots[i].data) fail("JPEG PSRAM allocation failed");
     xQueueSend(freeSlots,&i,0);
   }
-  bool ap=!config::WifiSsid[0];
-  if (!ap) {
-    WiFi.mode(WIFI_STA); WiFi.setSleep(false); WiFi.setAutoReconnect(true);
-    WiFi.begin(config::WifiSsid,config::WifiPassword);
-    const uint32_t start=millis();
-    while (WiFi.status()!=WL_CONNECTED && millis()-start<15000) delay(100);
-    if (WiFi.status()!=WL_CONNECTED) { WiFi.disconnect(true); ap=true; }
-  }
-  if (ap) {
-    WiFi.mode(WIFI_AP);
-    if (!WiFi.softAP(config::ApSsid,config::ApPassword,6,false,1)) fail("WiFi AP failed");
-  }
-  WiFi.setSleep(false);
-  const String ip=(ap?WiFi.softAPIP():WiFi.localIP()).toString();
-  Serial.printf("%s: %s TCP %u\n",ap?config::ApSsid:config::WifiSsid,ip.c_str(),config::Port);
-  display::splash(ap?config::ApSsid:config::WifiSsid,ip.c_str());
+  lan::begin();
+  display::splash(lan::name(),lan::status().c_str());
+  if (xTaskCreatePinnedToCore(renderTask,"lcd_present",4096,nullptr,3,nullptr,0)!=pdPASS)
+    fail("Presenter task allocation failed");
   if (xTaskCreatePinnedToCore(decodeTask,"jpeg_decode",8192,nullptr,3,nullptr,1)!=pdPASS)
     fail("Decoder task allocation failed");
-  server.begin(); server.setNoDelay(true);
 }
 void loop() {
+  if (lan::poll()) {
+    disconnect(); server.end(); ++generation; networkNotice=true;
+    if (lan::connected()) { server.begin(); server.setNoDelay(true); }
+  }
   Result r;
   while (xQueueReceive(results,&r,0)==pdTRUE) {
     if (r.ok) ++shown; else ++errors;
     if (authenticated && r.generation==generation)
       sendEvent(r.ok?"ACK1":"ERR1",r.sequence,r.decodeUs,r.totalUs);
   }
-  if (!client || !client.connected()) {
+  // Only update the LCD when all compressed slots are free: decoder cannot race splash.
+  if (networkNotice && !authenticated && uxQueueMessagesWaiting(freeSlots)==2 && display::idle()) {
+    display::splash(lan::name(),lan::status().c_str()); networkNotice=false;
+  }
+  if (lan::connected() && (!client || !client.connected())) {
     disconnect();
     client=server.accept();
     if (client) {
@@ -145,8 +162,14 @@ void loop() {
   if (millis()-lastTouch>=10) {
     lastTouch=millis(); const auto t=touch::poll();
     if (!t.down) touchArmed=true;
-    // Full state every 10 ms; no lost mouse-up and a host-side dead-man timer.
-    if (authenticated) sendEvent("TCH1",t.x,t.y,touchArmed && t.down?1:0);
+    const bool down=touchArmed && t.down;
+    const bool changed=t.x!=touchX || t.y!=touchY || down!=touchDown;
+    // Changes retain the 10 ms polling response. Idle state needs only a
+    // 50 ms heartbeat, well inside the host's 350 ms release watchdog.
+    if (authenticated && (changed || millis()-lastTouchSent>=(down?20U:50U))) {
+      lastTouchSent=millis(); touchX=t.x; touchY=t.y; touchDown=down;
+      sendEvent("TCH1",t.x,t.y,down?1:0);
+    }
   }
   if (millis()-lastPrint>=2000) {
     Serial.printf("display=%.1f fps errors=%lu internal=%u psram=%u\n",

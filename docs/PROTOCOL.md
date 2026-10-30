@@ -4,6 +4,31 @@ TCP 47989, one PC per receiver. All uint32 fields are big endian.
 Messages may be fragmented/coalesced arbitrarily by TCP; parsers accumulate exact lengths.
 Session state belongs to one TCP connection; reconnect resets framing and authentication.
 
+## LAN connection and discovery
+
+Receiver uses STA only, joins the existing 2.4GHz router, and never starts a SoftAP.
+The PC can connect through Ethernet or Wi-Fi on the same reachable LAN.
+Discovery query: UDP port47990, ASCII `MS3DISC1 ` + 32 random lowercase hex characters (41 bytes).
+Reply to the query source IP/port: `MS3HERE1 <nonce> <device-id> <tcp-port> <hostname>`.
+Device ID is the full12-digit lowercase STA MAC without separators. Hostname is
+`moonlight-s3-` + last6 digits of ID; names are not unique identifiers.
+Reply contains no password/token. Host validates nonce, ID, name and port, deduplicates
+by ID+address+port, and requires the user to choose a result. Discovery is not authentication.
+Receiver also advertises `_moonlight-s3._tcp` over mDNS with TXT id/version.
+Manual IP/hostname remains supported when broadcast discovery cannot reach the receiver.
+
+## Initial Wi-Fi provisioning over USB
+
+115200 baud on the same serial interface as firmware logs. Newline-terminated commands.
+`MS3STATUS1` responds `MS3STATUS1 <device-id> <IPv4> CONNECTED|WAITING|UNCONFIGURED`.
+Only after recognizing this response, the PC sends:
+`MS3WIFI1 <UTF8-SSID-as-hex> <UTF8-password-as-hex-or-dash>`.
+SSID:1..32 bytes; password:empty,8..63 bytes,or64 hexadecimal PSK characters; embedded NUL rejected.
+Receiver atomically stores one credentials blob in Preferences namespace `moonlight`, key `wifi`.
+Success response `MS3WIFI1 OK RESTART` means stored, not connected; device then reboots.
+Errors use `MS3WIFI1 ERROR <reason>`. Passwords are not logged. Provisioned credentials
+override compile-time defaults; connection retries keep running without an AP fallback.
+
 ## Authentication
 
 Host sends 36 bytes: ASCII `AUT1` + 32 ASCII hex characters of shared pairing token.
@@ -46,7 +71,9 @@ All packets: tag char[4], a uint32, b uint32, c uint32, total 16 bytes.
 | ERR1 | Sequence | Decode microseconds if available | Total microseconds if available |
 | TCH1 | Panel x 0..799 | Panel y 0..479 | Left contact state 0 or 1 |
 
-TCH1 repeats full state approximately every 10ms, including no-touch heartbeats.
+Touch is polled every 10ms. TCH1 sends changes immediately after polling, held-contact
+heartbeats every 20ms, and idle/no-touch heartbeats every 50ms. Full state is always sent.
+This reduces small TCP packet traffic while remaining inside the 350ms host watchdog.
 Device suppresses initial pressed state until it observes touch-up after authentication.
 Host releases input after 350ms without TCH1 and requires a fresh lift before accepting another press.
 Host releases on stop, exception or disconnect. No screen-to-host executable commands are transmitted.
@@ -60,3 +87,9 @@ Black-bar touches do not initiate a press; an existing drag leaving the image cl
 Coordinates map into the selected Windows monitor's physical pixel rectangle, including negative origins.
 SendInput absolute coordinates are normalized to the entire Windows virtual desktop.
 Toolbar is interpreted on the PC; firmware has no dependence on GUI layout.
+
+The receiver uses three RGB buffers with exclusive ownership: scanned buffer,
+queued/prepared buffer, and decoder buffer. Only the LCD-complete callback retires
+the previous scanned buffer. Decoder and presenter tasks overlap; ACK1 still
+follows the actual completed LCD switch, and the host permits three frames
+in flight in smooth mode, or two when smooth mode is disabled. Network/idle notices require both JPEG and RGB queues to be idle.

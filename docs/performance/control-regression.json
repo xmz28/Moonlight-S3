@@ -1,0 +1,10 @@
+{
+  "touch_events": 281,
+  "press_starts": 16,
+  "modes": [
+    "LEFT",
+    "RIGHT"
+  ],
+  "frames": 1804,
+  "error": null
+}

@@ -1,0 +1,37 @@
+{
+  "checks": [
+    "CRC rejected",
+    "invalid JPEG rejected",
+    "CRC rejected",
+    "invalid JPEG rejected",
+    "CRC rejected",
+    "invalid JPEG rejected",
+    "400x240 recovered",
+    "800x480 recovered",
+    "400x240 recovered",
+    "800x480 recovered",
+    "400x240 recovered",
+    "800x480 recovered"
+  ],
+  "serial": [
+    "display=0.0 fps errors=0 internal=144596 psram=4419836",
+    "display=0.0 fps errors=0 internal=144596 psram=4419836",
+    "PC connected; waiting for pairing",
+    "Frame 1 rejected: CRC, JPEG format or LCD synchronization",
+    "display=0.0 fps errors=1 internal=144556 psram=4419836",
+    "PC connected; waiting for pairing",
+    "E (119174) JPEG_DEC: JPEG parse SOI segment fail.",
+    "Frame 2 rejected: CRC, JPEG format or LCD synchronization",
+    "PC connected; waiting for pairing",
+    "Frame 3 rejected: CRC, JPEG format or LCD synchronization",
+    "PC connected; waiting for pairing",
+    "E (119562) JPEG_DEC: JPEG parse SOI segment fail.",
+    "Frame 4 rejected: CRC, JPEG format or LCD synchronization",
+    "PC connected; waiting for pairing",
+    "Frame 5 rejected: CRC, JPEG format or LCD synchronization",
+    "PC connected; waiting for pairing",
+    "E (120006) JPEG_DEC: JPEG parse SOI segment fail.",
+    "Frame 6 rejected: CRC, JPEG format or LCD synchronization",
+    "PC connected; waiting for pairing"
+  ]
+}
