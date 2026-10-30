@@ -8,6 +8,7 @@
 #include "touch.h"
 #include "lan.h"
 #include "ui.h"
+#include "pairing.h"
 
 #if !CONFIG_IDF_TARGET_ESP32S3
 #error This firmware requires ESP32-S3
@@ -21,7 +22,9 @@ static Slot slots[2];
 static QueueHandle_t freeSlots, readySlots, results, renderJobs;
 static WiFiServer server(config::Port);
 static WiFiClient client;
-static uint8_t header[36];
+static uint8_t header[292];
+enum class Handshake { Hello, PairProof, AuthProof };
+static Handshake handshake=Handshake::Hello;
 static size_t have, received;
 static int receiving=-1;
 static bool authenticated, touchArmed;
@@ -37,8 +40,9 @@ static void put32(uint8_t *p,uint32_t v) {
   p[0]=v>>24; p[1]=v>>16; p[2]=v>>8; p[3]=v;
 }
 static void disconnect() {
-  if (authenticated) networkNotice=true;
+  if (authenticated) {networkNotice=true;ui::streamEnded();}
   client.stop(); authenticated=false; touchArmed=false; have=received=0;
+  handshake=Handshake::Hello;pairing::abort();
   if (receiving>=0) { xQueueSend(freeSlots,&receiving,0); receiving=-1; }
 }
 static bool sendEvent(const char *tag,uint32_t a,uint32_t b,uint32_t c) {
@@ -98,6 +102,7 @@ void setup() {
     xQueueSend(freeSlots,&i,0);
   }
   lan::begin();
+  pairing::begin();
   ui::poll(true);
   if (xTaskCreatePinnedToCore(renderTask,"lcd_present",4096,nullptr,3,nullptr,0)!=pdPASS)
     fail("Presenter task allocation failed");
@@ -105,6 +110,7 @@ void setup() {
     fail("Decoder task allocation failed");
 }
 void loop() {
+  pairing::poll();
   if (lan::poll()) {
     disconnect(); server.end(); ++generation; networkNotice=true;
     if (lan::connected()) { server.begin(); server.setNoDelay(true); }
@@ -133,19 +139,33 @@ void loop() {
   if (client && millis()-lastRx>3000) disconnect();
   if (client) {
     // Read bounded chunks without blocking touch polling or ACK delivery.
-    const size_t need=authenticated?16:36;
+    const size_t need=authenticated?16:handshake==Handshake::PairProof?292:handshake==Handshake::AuthProof?68:36;
     if (receiving<0 && have<need && client.available()) {
       const int n=client.read(header+have,min<size_t>(need-have,client.available()));
       if (n>0) { have+=n; lastRx=millis(); }
     }
-    if (!authenticated && have==36) {
-      uint8_t difference=0;
-      for (size_t i=0;i<32;++i) difference|=header[4+i]^config::Token[i];
-      if (memcmp(header,"AUT1",4) || difference) disconnect();
-      else {
-        authenticated=true; have=0; touchArmed=false;
-        lan::streamStarted();
-        sendEvent("RDY1",800,480,config::MaxJpeg);
+    if (!authenticated && have==need) {
+      if (handshake==Handshake::Hello) {
+        if (!memcmp(header,"PAR2",4)) {
+          uint8_t reply[288];
+          if (!pairing::start(header+4,reply) || client.write(reply,sizeof(reply))!=sizeof(reply)) disconnect();
+          else {handshake=Handshake::PairProof;have=0;lastRx=millis();}
+        } else if (!memcmp(header,"AU2?",4)) {
+          uint8_t reply[48];
+          if (!pairing::challenge(header+4,reply) || client.write(reply,sizeof(reply))!=sizeof(reply)) disconnect();
+          else {handshake=Handshake::AuthProof;have=0;lastRx=millis();}
+        } else disconnect(); // AUT1 and the compiled shared key are no longer accepted.
+      } else if (handshake==Handshake::PairProof) {
+        uint8_t reply[48];
+        if (pairing::finish(header,reply)) client.write(reply,sizeof(reply));
+        ui::invalidate();disconnect();
+      } else {
+        uint8_t reply[68];
+        if (!pairing::authenticate(header,reply) || client.write(reply,sizeof(reply))!=sizeof(reply)) disconnect();
+        else {
+          authenticated=true;have=0;touchArmed=false;lan::streamStarted();
+          sendEvent("RDY1",800,480,config::MaxJpeg);
+        }
       }
     } else if (authenticated && receiving<0 && have==16) {
       const uint32_t length=be32(header+8);

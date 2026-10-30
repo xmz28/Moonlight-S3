@@ -1,0 +1,18 @@
+{
+  "date": "2026-10-30",
+  "automated_tests": 37,
+  "build": true,
+  "flash_hash_verified": true,
+  "packaged_gui_smoke": true,
+  "hardware_signed_announcement_migration": true,
+  "user_confirmed": {
+    "computer_list": true,
+    "paired_direct_stream": true,
+    "back_to_computer_list": true,
+    "delete_pairing": true,
+    "first_pairing_status": true,
+    "automatic_pc_pin_dialog": true,
+    "automatic_stream_after_pin": true
+  },
+  "limits": "Four distinct computers and complex multi-NIC routing not physically tested; no new performance comparison."
+}

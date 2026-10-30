@@ -22,6 +22,5 @@ constexpr uint32_t MaxJpeg = 256 * 1024;
 constexpr char WifiSsid[] = MOONLIGHT_WIFI_SSID;
 constexpr char WifiPassword[] = MOONLIGHT_WIFI_PASSWORD;
 constexpr uint16_t DiscoveryPort = 47990;
-constexpr char Token[] = MOONLIGHT_PAIRING_TOKEN;
-static_assert(sizeof(Token) == 33, "Pairing token must be 32 ASCII hex characters");
+// Pairing credentials are generated during physical PIN authorization and saved in NVS.
 }

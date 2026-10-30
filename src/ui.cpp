@@ -5,6 +5,7 @@
 #include "ui.h"
 #include "display.h"
 #include "lan.h"
+#include "pairing.h"
 
 namespace ui {
 namespace {
@@ -16,7 +17,7 @@ struct GlyphInfo { uint32_t start=0,end=0;uint8_t advance=22; };
 struct GlyphCache { int glyph=-1;GlyphInfo info; } glyphCache[16];
 uint32_t cacheNext=0;
 uint8_t glyphBitmap[1024];
-enum class Page { Home, Networks, Keyboard, Joining };
+enum class Page { Home, Networks, Keyboard, Joining, Pairing, Paired };
 Page page=Page::Home;
 struct Network { char ssid[33]; int rssi; wifi_auth_mode_t auth; } networks[20];
 int count=0,offset=0;
@@ -27,6 +28,9 @@ String notice;
 uint32_t scanStarted=0;
 lan::JoinState lastJoin=lan::JoinState::Idle;
 lan::PlayState lastPlay=lan::PlayState::Idle;
+String lastPair;
+int deleteIndex=-1,computerOffset=0;
+uint32_t lastComputerRevision=0;
 uint16_t *canvas=nullptr;
 constexpr uint16_t Background=0x08c4,Card=0x1127,Line=0x21ed,White=0xef9e,Muted=0x8c55,Accent=0x3e78,Green=0x5e8f;
 
@@ -174,16 +178,36 @@ const char *keys(int row) {
 void draw() {
   int index=-1;canvas=display::beginUi(index);if (!canvas) return;
   if (page==Page::Home) {
-    heading("Moonlight S3","ESP32-S3 触屏云桌面");button(610,24,166,52,"Wi-Fi 设置");
-    rectangle(24,120,752,218,Card);rectangle(24,120,5,218,lan::connected()?Green:Muted);
-    text(48,135,lan::connected()?"已连接局域网":"正在连接 Wi-Fi",lan::connected()?Green:Muted);
-    const String ssid=lan::ssid();text(48,180,ssid.length()?ssid.c_str():"尚未设置网络");
-    const String ip=lan::status();text(48,228,lan::connected()?ip.c_str():"等待网络连接",White,lan::connected());
-    text(48,293,lan::name(),Muted);
-    button(24,360,286,64,lan::playState()==lan::PlayState::Waiting?"等待电脑响应...":"开始串流",true);
-    text(336,360,"请保持电脑端软件运行",Muted);
-    text(336,395,lan::playState()==lan::PlayState::TimedOut?"电脑未响应，请重试":"电脑端也可直接开始串流",Muted);
-    text(26,444,"同一局域网 · JPEG 投屏 · 触摸反控",Muted);
+    heading("Moonlight S3","选择电脑，即可开始串流");button(432,24,162,52,"已配对设备");button(610,24,166,52,"Wi-Fi 设置");
+    const String network=lan::connected()?lan::ssid()+" · "+lan::status():"请先连接 Wi-Fi";
+    text(26,97,network.c_str(),Muted,false,775);
+    if(!lan::computerCount()) {
+      text(48,166,"正在查找局域网电脑...",White);
+      text(48,218,"请保持电脑上的 Moonlight S3 软件打开",Muted);
+    }
+    for(int row=0;row<4;++row){
+      lan::Computer c;if(!lan::computer(computerOffset+row,c))break;
+      const int y=134+row*64;rectangle(24,y,752,58,Card);
+      text(40,y+1,c.name,White,false,420);text(40,y+29,c.ip,Muted);
+      text(440,y+12,c.paired?"已配对":"首次串流需要配对",c.paired?Green:Accent);
+    }
+    button(24,410,180,48,"刷新电脑");
+    if(lan::computerCount()>4){button(464,410,120,48,"上一页");button(600,410,120,48,"下一页");}
+  } else if (page==Page::Pairing) {
+    heading("Connecting",lan::selectedName());button(656,24,120,52,"返回");
+    rectangle(24,120,752,218,Card);
+    const bool timeout=lan::playState()==lan::PlayState::TimedOut;
+    text(48,145,timeout?"电脑未响应，请返回后重试":lan::needsPin()?pairing::status():"正在连接已配对电脑...",White);
+    if(lan::needsPin()&&!timeout)text(300,207,pairing::pin(),Accent,true);
+    text(48,288,lan::needsPin()?"在电脑弹窗输入此 PIN，成功后自动串流":"以后点击这台电脑即可直接串流",Muted);
+  } else if (page==Page::Paired) {
+    heading("Paired devices","删除后，下次串流需要重新配对");button(656,24,120,52,"返回");
+    if(!pairing::count())text(48,166,"暂无已配对电脑",Muted);
+    for(int i=0;i<pairing::count();++i){const int y=128+i*76;
+      rectangle(24,y,752,66,Card);text(40,y+2,pairing::peerName(i),White,false,620);
+      text(40,y+32,pairing::peerId(i),Muted,false,620);
+      button(642,y+8,120,48,deleteIndex==i?"确认删除":"删除");
+    }
   } else if (page==Page::Networks) {
     heading("Wi-Fi","只在此页面手动扫描；串流时不扫描");button(656,24,120,52,"返回");
     text(24,101,notice.c_str(),scanning?Accent:Muted);
@@ -233,8 +257,9 @@ bool begin() {
   if (!fontPartition || esp_partition_read(fontPartition,0,header,sizeof(header))!=ESP_OK) return false;
   return !memcmp(header,"MSF1",4) && header[1]==GlyphCount;
 }
-bool active() { return page!=Page::Home; }
+bool active() { return page!=Page::Home && page!=Page::Pairing; }
 void invalidate() { dirty=true; }
+void streamEnded(){page=Page::Home;lan::cancelPlay();dirty=true;}
 void poll(bool allowed) {
   if (!allowed) return; // No scan polling, allocation, text drawing or refresh during video.
   if (requestScan) { requestScan=false;startScan(); }
@@ -243,6 +268,11 @@ void poll(bool allowed) {
   if (state!=lastJoin) { lastJoin=state;dirty=true; }
   const auto play=lan::playState();
   if (play!=lastPlay) { lastPlay=play;dirty=true; }
+  const String pair=String(pairing::status())+pairing::pin();
+  if(pair!=lastPair){lastPair=pair;dirty=true;}
+  const auto revision=lan::computerRevision();
+  if(revision!=lastComputerRevision){lastComputerRevision=revision;computerOffset=min(computerOffset,max(0,((lan::computerCount()-1)/4)*4));if(page==Page::Home)dirty=true;}
+  if(page==Page::Pairing && lan::playState()==lan::PlayState::Idle && !lan::needsPin()){page=Page::Home;dirty=true;}
   if (dirty) draw();
 }
 void touch(const touch::State &t) {
@@ -251,9 +281,22 @@ void touch(const touch::State &t) {
   wasDown=true;
   if (page==Page::Home) {
     if (hit(610,24,166,52,t)) {
-      page=Page::Networks;lan::setConfiguring(true);requestScan=dirty=true;
+      lan::cancelPlay();page=Page::Networks;lan::setConfiguring(true);requestScan=dirty=true;
+    } else if(hit(432,24,162,52,t)){page=Page::Paired;deleteIndex=-1;dirty=true;}
+    else if(hit(24,410,180,48,t)){lan::scanComputers();computerOffset=0;dirty=true;}
+    else if(hit(464,410,120,48,t)){computerOffset=max(0,computerOffset-4);dirty=true;}
+    else if(hit(600,410,120,48,t)){if(computerOffset+4<lan::computerCount())computerOffset+=4;dirty=true;}
+    else for(int row=0;row<4;++row)if(hit(24,134+row*64,752,58,t)){
+      lan::Computer c;if(lan::computer(computerOffset+row,c)&&lan::requestPlay(c.id)){page=Page::Pairing;dirty=true;}
     }
-    else if (hit(24,360,286,64,t)) { lan::requestPlay();dirty=true; }
+  } else if(page==Page::Pairing) {
+    if(hit(656,24,120,52,t)){lan::cancelPlay();page=Page::Home;dirty=true;}
+  } else if(page==Page::Paired) {
+    if(hit(656,24,120,52,t)){page=Page::Home;deleteIndex=-1;dirty=true;}
+    else for(int i=0;i<pairing::count();++i)if(hit(642,136+i*76,120,48,t)){
+      if(deleteIndex==i){char id[33];strlcpy(id,pairing::peerId(i),sizeof(id));pairing::forget(id);lan::scanComputers();deleteIndex=-1;}else deleteIndex=i;
+      dirty=true;break;
+    }
   } else if (page==Page::Networks) {
     if (hit(656,24,120,52,t)) home();
     else if (hit(24,402,166,54,t) && !scanning) { requestScan=true;dirty=true; }

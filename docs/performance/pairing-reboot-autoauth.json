@@ -1,0 +1,61 @@
+{
+  "label": "pairing-reboot-autoauth",
+  "source": "real desktop",
+  "quality": 60,
+  "target_fps": 25,
+  "control": false,
+  "smooth": true,
+  "results": [
+    {
+      "resolution": "400x240",
+      "seconds": 15.125,
+      "sent": 231,
+      "acked": 228,
+      "failed": 0,
+      "error": null,
+      "fps": 15.074,
+      "profile": {
+        "capture_ms": 4781.350900535472,
+        "encode_ms": 270.5792001215741,
+        "send_ms": 55.637799901887774,
+        "frames": 231,
+        "bytes": 2694284
+      },
+      "reports": [
+        "桌面抓屏：DXGI",
+        "已配对，正在传送桌面；停止按钮立即结束控制",
+        "显示 15.5 FPS | 解码 14.3 ms | 显示处理 55.4 ms | 帧确认 187 ms | 错误 0",
+        "显示 17.5 FPS | 解码 14.3 ms | 显示处理 50.7 ms | 帧确认 156 ms | 错误 0",
+        "显示 17.9 FPS | 解码 14.5 ms | 显示处理 62.5 ms | 帧确认 141 ms | 错误 0",
+        "显示 18.7 FPS | 解码 13.6 ms | 显示处理 79.5 ms | 帧确认 125 ms | 错误 0",
+        "显示 20.3 FPS | 解码 13.1 ms | 显示处理 64.2 ms | 帧确认 141 ms | 错误 0",
+        "显示 19.7 FPS | 解码 14.0 ms | 显示处理 73.9 ms | 帧确认 109 ms | 错误 0",
+        "显示 19.4 FPS | 解码 13.9 ms | 显示处理 78.0 ms | 帧确认 141 ms | 错误 0",
+        "显示 18.4 FPS | 解码 13.7 ms | 显示处理 66.1 ms | 帧确认 219 ms | 错误 0",
+        "显示 17.7 FPS | 解码 14.6 ms | 显示处理 75.6 ms | 帧确认 156 ms | 错误 0",
+        "显示 14.0 FPS | 解码 13.4 ms | 显示处理 47.9 ms | 帧确认 140 ms | 错误 0",
+        "显示 18.7 FPS | 解码 14.0 ms | 显示处理 41.0 ms | 帧确认 94 ms | 错误 0",
+        "显示 8.9 FPS | 解码 14.7 ms | 显示处理 43.9 ms | 帧确认 282 ms | 错误 0",
+        "显示 5.9 FPS | 解码 13.6 ms | 显示处理 51.4 ms | 帧确认 437 ms | 错误 0"
+      ]
+    }
+  ],
+  "serial": [
+    "display=0.0 fps errors=0 internal=142280 psram=4419836",
+    "display=0.0 fps errors=0 internal=142280 psram=4419836",
+    "display=0.0 fps errors=0 internal=142280 psram=4419836",
+    "PC connected; waiting for pairing",
+    "display=5.0 fps errors=0 internal=139116 psram=4419836",
+    "display=18.5 fps errors=0 internal=136648 psram=4419836",
+    "render64 decode=13970 us expand=21509 us wait=18767 us",
+    "display=18.5 fps errors=0 internal=136428 psram=4419836",
+    "display=20.0 fps errors=0 internal=138684 psram=4419836",
+    "render64 decode=14003 us expand=21754 us wait=21797 us",
+    "display=18.5 fps errors=0 internal=133620 psram=4419836",
+    "render64 decode=14024 us expand=21558 us wait=18692 us",
+    "display=16.0 fps errors=0 internal=135236 psram=4419836",
+    "display=10.4 fps errors=0 internal=129608 psram=4419836",
+    "[ 36154][E][NetworkClient.cpp:435] write(): fail on fd 50, errno: 104, \"Connection reset by peer\"",
+    "display=7.0 fps errors=0 internal=141000 psram=4419836"
+  ]
+}

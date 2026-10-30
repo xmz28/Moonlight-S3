@@ -14,6 +14,14 @@ JoinState joinState();
 bool join(const char *ssid,const char *password);
 enum class PlayState { Idle, Waiting, TimedOut };
 PlayState playState();
-bool requestPlay();
+struct Computer { char id[33],name[49],ip[16];bool paired=false;uint32_t seen=0; };
+void scanComputers();
+int computerCount();
+bool computer(int index,Computer &out);
+uint32_t computerRevision();
+bool requestPlay(const char *computerId);
+void cancelPlay();
+const char *selectedName();
+bool needsPin();
 void streamStarted();
 }

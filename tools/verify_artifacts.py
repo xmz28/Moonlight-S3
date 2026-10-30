@@ -34,9 +34,16 @@ font=(root/"assets/ui_font.bin").read_bytes()
 font_partition=next(p for p in partitions if p["name"]=="ui_font")
 assert font_partition["offset"]==0x610000 and len(font)<=font_partition["size"]
 assert factory[0x610000:0x610000+len(font)]==font
-token=re.search(r'"([0-9a-f]{32})"',(root/"include/config_secrets.h").read_text()).group(1)
+legacy=re.search(r'MOONLIGHT_PAIRING_TOKEN\s+"([0-9a-f]{32})"',(root/"include/config_secrets.h").read_text(encoding="utf-8"))
+if legacy:
+    assert legacy.group(1).encode() not in app, "Old compiled pairing token must not occur in firmware"
 for config in (host/"settings.json",host/"dist/MoonlightS3Host/settings.json"):
-    assert json.loads(config.read_text(encoding="utf-8"))["token"]==token
+    settings=json.loads(config.read_text(encoding="utf-8"))
+    assert "token" not in settings, "Top-level legacy token must be migrated out"
+    for identity,record in settings.get("pairings",{}).items():
+        assert re.fullmatch(r"[0-9a-f]{12}",identity)
+        assert re.fullmatch(r"[0-9a-f]{32}",record["host_id"])
+        assert re.fullmatch(r"[0-9a-f]{32}",record["token"])
 manifest={"target":"ESP32-S3-N16R8","flash_mode":"DIO","flash_bytes":16*1024*1024,
           "application_partition_bytes":application["size"],"partitions":partitions,"artifacts":{}}
 for name in ("firmware.bin","firmware.factory.bin","bootloader.bin","partitions.bin"):
@@ -44,6 +51,6 @@ for name in ("firmware.bin","firmware.factory.bin","bootloader.bin","partitions.
     manifest["artifacts"][name]={"bytes":len(data),"sha256":hashlib.sha256(data).hexdigest()}
 (build/"artifact-manifest.json").write_text(json.dumps(manifest,indent=2)+"\n")
 print("PASS: ESP32-S3 chip ID, 16 MB DIO headers, partition bounds, combined image contents.")
-print("PASS: firmware / host source / packaged host pairing tokens match.")
+print("PASS: no compiled legacy token; host credentials use explicit device identities.")
 print(f"App bytes: {len(app)} / {application['size']}; factory bytes: {len(factory)}")
 print("Manifest:",build/"artifact-manifest.json")

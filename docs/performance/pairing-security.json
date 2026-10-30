@@ -1,0 +1,8 @@
+{
+  "saved_credentials_authenticate": true,
+  "fresh_nonce": true,
+  "old_client_proof_rejected": true,
+  "wrong_proof_rejected": true,
+  "unknown_host_rejected": true,
+  "legacy_protocol_rejected": true
+}

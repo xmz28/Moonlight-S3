@@ -9,6 +9,7 @@
 #include <atomic>
 #include "config.h"
 #include "lan.h"
+#include "pairing.h"
 
 namespace lan {
 namespace {
@@ -21,6 +22,9 @@ std::atomic<uint32_t> associations{0};
 uint32_t joinAssociation=0;
 uint32_t playId=0,playStarted=0;
 PlayState playing=PlayState::Idle;
+Computer computers[8];int computersCount=0;uint32_t revision=0;
+char selectedComputer[33]={},selectedComputerName[49]={};
+bool pinRequired=false;
 NetworkUDP discovery;
 char id[13], hostname[32], line[224];
 size_t lineSize=0;
@@ -101,38 +105,44 @@ void advertise() {
     MDNS.addServiceTxt("moonlight-s3","tcp","version","1");
   }
 }
-void signature(const char *data,size_t length,char *out) {
-  uint8_t digest[32]={};
-  const auto *algorithm=mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
-  if (!algorithm || mbedtls_md_hmac(algorithm,reinterpret_cast<const uint8_t *>(config::Token),32,
-      reinterpret_cast<const uint8_t *>(data),length,digest)) { out[0]=0;return; }
-  constexpr char digits[]="0123456789abcdef";
-  for (int i=0;i<32;++i) { out[i*2]=digits[digest[i]>>4];out[i*2+1]=digits[digest[i]&15]; }
-  out[64]=0;
-}
-void controlQuery(const char *request) {
-  if (request[40]!=' ') return;
-  for (int i=8;i<40;++i) if (hex(request[i])<0) return;
-  char expected[65];signature(request,40,expected);
-  if (!expected[0]) return;
-  uint8_t difference=0;
-  for (int i=0;i<64;++i) difference|=expected[i]^request[41+i];
-  if (difference) return;
-  char response[160],nonce[33];memcpy(nonce,request+8,32);nonce[32]=0;
-  const int length=snprintf(response,sizeof(response),"MS3CTL1 %s %s %08lx",nonce,id,playId);
-  char mac[65];signature(response,length,mac);
-  if (!mac[0]) return;
-  snprintf(response+length,sizeof(response)-length," %s",mac);
-  if (discovery.beginPacket(discovery.remoteIP(),discovery.remotePort())) {
-    discovery.write(reinterpret_cast<const uint8_t *>(response),strlen(response));discovery.endPacket();
+void hostAnnouncement(char *request) {
+  char *fields[9]={},*save=nullptr;int count=0;
+  // Exactly seven fields plus signature, bounded before tokenization.
+  for(char *part=strtok_r(request," ",&save);part&&count<9;part=strtok_r(nullptr," ",&save))fields[count++]=part;
+  if(count!=8||strcmp(fields[0],"MS3HOST2")||strlen(fields[1])!=32||strlen(fields[2])!=32||strcmp(fields[3],id)||
+     (strcmp(fields[4],"0")&&strcmp(fields[4],"1"))||strlen(fields[5])>96||strcmp(fields[6],"1"))return;
+  for(int i=0;i<32;++i)if(hex(fields[1][i])<0||hex(fields[2][i])<0)return;
+  char name[49]={};if(!decodeHex(fields[5],name,sizeof(name))||!name[0])return;
+  for(const unsigned char *c=(const unsigned char *)name;*c;++c)if(*c<32||*c==127)return;
+  char prefix[288],expected[65];
+  const int length=snprintf(prefix,sizeof(prefix),"MS3HOST2 %s %s %s %s %s 1",fields[1],fields[2],id,fields[4],fields[5]);
+  pairing::signature(fields[2],prefix,length,expected);
+  bool trusted=false;
+  if(!strcmp(fields[4],"1")&&expected[0]&&strlen(fields[7])==64) {
+    uint8_t difference=0;for(int i=0;i<64;++i)difference|=expected[i]^fields[7][i];trusted=!difference;
   }
+  int index=-1;for(int i=0;i<computersCount;++i)if(!strcmp(computers[i].id,fields[2])){index=i;break;}
+  if(index<0&&computersCount<8)index=computersCount++;
+  if(index>=0) {
+    auto &c=computers[index];const String ip=discovery.remoteIP().toString();
+    if(strcmp(c.id,fields[2])||strcmp(c.name,name)||strcmp(c.ip,ip.c_str())||c.paired!=trusted)++revision;
+    strlcpy(c.id,fields[2],sizeof(c.id));strlcpy(c.name,name,sizeof(c.name));strlcpy(c.ip,ip.c_str(),sizeof(c.ip));c.paired=trusted;c.seen=millis();
+  }
+  const bool chosen=playId&&!strcmp(selectedComputer,fields[2]);
+  const bool authorized=trusted&&(!chosen||!pinRequired);
+  char response[224];const int n=snprintf(response,sizeof(response),"MS3DEV2 %s %s %s %08lx %d",fields[1],fields[2],id,chosen?playId:0UL,authorized?1:0);
+  char signature[65]={};if(authorized)pairing::signature(fields[2],response,n,signature);
+  snprintf(response+n,sizeof(response)-n," %s",signature[0]?signature:"-");
+  if(discovery.beginPacket(discovery.remoteIP(),discovery.remotePort())){discovery.write((const uint8_t *)response,strlen(response));discovery.endPacket();}
 }
 void discoverPoll() {
   const int size=discovery.parsePacket();
   if (!size) return;
-  char request[128]={};
-  if (size==105 && discovery.read(request,105)==105 && !strncmp(request,"MS3CTL1 ",8)) {
-    controlQuery(request);return;
+  char request[384]={};
+  if(size>0&&size<int(sizeof(request))&&size!=41) {
+    if(discovery.read(request,size)==size&&!strncmp(request,"MS3HOST2 ",9))hostAnnouncement(request);
+    else discovery.clear();
+    return;
   }
   if (size!=41 || discovery.read(request,41)!=41 || strncmp(request,"MS3DISC1 ",9)) {
     discovery.clear(); return;
@@ -181,7 +191,7 @@ void setConfiguring(bool enabled) {
   configuring=enabled;
   WiFi.setAutoReconnect(!enabled);
   if (enabled) {
-    playId=0;playing=PlayState::Idle;
+    cancelPlay();
     joining=JoinState::Idle;
     if (WiFi.status()!=WL_CONNECTED) WiFi.disconnect(false,false);
   } else {
@@ -196,8 +206,20 @@ void setConfiguring(bool enabled) {
   }
 }
 PlayState playState() { return playing; }
-bool requestPlay() {
+void scanComputers(){computersCount=0;memset(computers,0,sizeof(computers));++revision;}
+int computerCount(){return computersCount;}
+bool computer(int index,Computer &out){if(index<0||index>=computersCount)return false;out=computers[index];out.paired=out.paired&&pairing::paired(out.id);return true;}
+uint32_t computerRevision(){return revision;}
+const char *selectedName(){return selectedComputerName;}
+bool needsPin(){return pinRequired;}
+void cancelPlay(){playId=0;playing=PlayState::Idle;pairing::cancel();}
+bool requestPlay(const char *computerId) {
   if (!online || configuring) return false;
+  int index=-1;for(int i=0;i<computersCount;++i)if(!strcmp(computers[i].id,computerId)&&millis()-computers[i].seen<10000){index=i;break;}
+  if(index<0)return false;
+  const auto &c=computers[index];strlcpy(selectedComputer,c.id,sizeof(selectedComputer));strlcpy(selectedComputerName,c.name,sizeof(selectedComputerName));
+  pinRequired=!(c.paired&&pairing::paired(c.id));
+  if(pinRequired){pairing::open(c.id,c.name);if(!pairing::enabled())return false;}else pairing::cancel();
   do { playId=esp_random(); } while (!playId);
   playStarted=millis();playing=PlayState::Waiting;
   return true;
@@ -224,7 +246,8 @@ String status() {
 }
 bool poll() {
   serialPoll();
-  if (playId && millis()-playStarted>15000) { playId=0;playing=PlayState::TimedOut; }
+  if(playId&&(millis()-playStarted>(pinRequired?120000U:15000U)||(pinRequired&&!pairing::enabled()&&!pairing::paired(selectedComputer)))){playId=0;playing=PlayState::TimedOut;}
+  for(int i=0;i<computersCount;)if(millis()-computers[i].seen>10000){for(int j=i+1;j<computersCount;++j)computers[j-1]=computers[j];--computersCount;++revision;}else ++i;
   const bool now=WiFi.status()==WL_CONNECTED && uint32_t(WiFi.localIP())!=0;
   const IPAddress ip=now?WiFi.localIP():IPAddress();
   const bool changed=now!=online || ip!=address;
