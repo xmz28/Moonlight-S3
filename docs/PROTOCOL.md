@@ -1,4 +1,4 @@
-# Moonlight S3 wire protocol v2 authorization / v1 JPEG framing
+# Moonlight S3 wire protocol v3 session control / v2 PIN authorization / v1 JPEG framing
 
 TCP 47989, one PC per receiver. All uint32 fields are big endian.
 Messages may be fragmented/coalesced arbitrarily by TCP; parsers accumulate exact lengths.
@@ -47,7 +47,7 @@ Client proof=HMAC-SHA256(K, `client-v2:` || T), server proof uses `server-v2:`. 
 
 Subsequent TCP connections:
 
-1. PC → S3: `AU2?` + saved host ID32 (36 bytes).
+1. PC → S3: `AU3?` + saved host ID32 + active request ID uint32 (40 bytes). S3 checks this exact physically initiated request before issuing the challenge and before accepting its proof. Cancelled/expired requests and legacy AU2 are rejected. The request field is a lifecycle guard, not an extension to the proof transcript.
 2. S3 → PC: `CHL2` + device ID12 + fresh nonce32 (48 bytes).
 3. PC → S3: `PRF2` +64 ASCII hex HMAC(key, `client` || device ID12 || host ID32 || nonce32), total68 bytes.
 4. S3 → PC: `OKA2` +64 ASCII hex HMAC(key, `server` || same transcript), total68 bytes, followed by `RDY1` below. Proofs apply only to the outstanding challenge on that TCP connection.
@@ -93,7 +93,7 @@ Host releases on stop, exception or disconnect. No screen-to-host executable com
 ## Rendering and touch
 
 Logical screen coordinates always remain 800×480 even when JPEG uses 400×240.
-With toolbar enabled, y=448..479 is reserved for five 160px buttons: LEFT, RIGHT, SCROLL, KEYBOARD, BACK.
+With toolbar enabled, y=448..479 is reserved for six buttons: LEFT x0..159, RIGHT x160..319, SCROLL x320..479, KEYBOARD x480..639, BACK x640..719, MENU x720..799.
 Desktop is fitted with preserved aspect ratio in the remaining rectangle.
 Black-bar touches do not initiate a press; an existing drag leaving the image clamps at the image boundary.
 Coordinates map into the selected Windows monitor's physical pixel rectangle, including negative origins.
@@ -125,3 +125,27 @@ The S3 screen opens a PIN window only for the tapped computer ID, and PAR2 must 
 
 
 Authentication replay boundary: the nonce is freshly sampled from the ESP32-S3 hardware RNG for each connection, and the pending challenge is consumed on the first proof attempt and cleared on disconnect. Recorded proofs do not authenticate a new nonce. This protection does not authenticate/encrypt JPG1/TCH1 payloads or prevent live on-path relay. See PAIRING.md for the plain-language explanation and historical device-test evidence.
+
+## Session control v3 (supersedes HOST2/DEV2 play flow above)
+
+The PC continues announcing during capture, including busy state for other receivers:
+
+`MS3HOST3 nonce32 pcID32 deviceID12 known nameHex I|B phase action8hex reason monitors signature`
+
+S3 replies:
+
+`MS3DEV3 nonce32 pcID32 deviceID12 action8hex paired options8hex flow signature`
+
+HMAC-SHA256 uses the saved credential and covers the full ASCII prefix before the final space/signature. Unknown credentials use `-` and never authorize automatic capture. Names and addresses are not identities. HOST2/DEV2 are recognized for address probing only; current GUI requires v3 for starting sessions.
+
+Phases: 0 idle, 1 accepted, 2 PIN, 3 verifying, 4 preparing, 5 first frame, 6 streaming, 7 declined, 8 failed, 9 disconnected, 10 cancelled. Reasons: 0 none, 1 network, 2 authorization, 3 busy, 4 capture, 5 input, 6 decode, 7 expired, 8 user stopped, 9 version. Status applies only to the selected PC and current action. Terminal states stay terminal until a new physical request.
+
+Flow: 0 no request, 1 pending, 2 streaming, 3 cancelled, 4 ended/failed/expired. PC handles cancellation/expiry even while PIN dialog is open. Initial waiting timeout is 15 seconds; accepted preparation permits up to 60 seconds, first pairing 120 seconds. Reconnection requires a fresh physical request ID.
+
+Options uint32: bit0 trackpad, bit2 toolbar, bit3 control allowed, bit4 400x240 (clear=800x480), bits8..11 monitor1..8, bits16..23 JPEG quality30..90, bits24..29 FPS10..30. Other bits reserved. Options live in S3 NVS `ms3ui/profiles`, per exact PC identity.
+
+Current application storage uses dedicated NVS partition `ms3_store`, offset0x910000, size64KB. First boot copies the application's existing `moonlight/wifi`, `ms3pair/peers` or legacy `peer`, and `ms3ui/profiles` from default NVS if absent in the destination. Existing destination keys, including an empty peers table, take precedence so reboot cannot restore a deleted pairing. Source NVS and unrelated projects are retained. Wi-Fi driver persistence is disabled; explicit application writes target the dedicated partition. Partition table and app must be updated together when migrating an older installation.
+
+Additional 16-byte `(tag,a,b,c)` messages from S3: PAU3 a=1 pause/0 resume; BYE3 disconnect; MOD3 a=0 direct/1 trackpad; KEY3 a=0..7 (Esc,Enter,Tab,Backspace,Ctrl+C,Ctrl+V,Ctrl+A,Alt+Tab); DRP3 a=sequence retires an in-flight frame dropped while pausing. TXT3 has a=1..128 followed by exactly a bytes UTF-8. Current screen keyboard produces ASCII. These are fixed input actions, not shell commands; KEY3/TXT3 are ignored in view-only mode.
+
+While paused the host sends NOP3 every 500ms; TCH1 idle heartbeat continues. The receiver drains in-flight JPG1 bodies and sends DRP3 so the local UI cannot race JPEG rendering. MENU at logical x720..799,y448..479 remains available when the bottom toolbar is hidden. Opening MENU releases input; resume requires touch-up before another press.

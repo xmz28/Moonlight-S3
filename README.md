@@ -8,7 +8,7 @@ ESP32-S3 的 SIMD JPEG 软件解码 → RGB565 屏幕。
 GT911 触摸通过同一连接回传，由电脑调用 Windows SendInput。
 
 这是自定义 JPEG 串流协议，不兼容 Moonlight/Sunshine 的 GameStream 协议。
-首版支持 Windows 桌面、左键点击/拖动、右键、滚轮和 Windows 屏幕键盘入口。
+支持 Windows 桌面、单点直接触摸/触摸板、长按右键、滚轮、本地文字键盘及会话菜单，详见 [连接与操作说明](docs/SESSION_UX.md)。
 没有音频、剪贴板、文件传输、原生多点 Windows 触摸、互联网中继和 TLS。
 优先用于本地 Wi-Fi；远程使用需要自行提供可路由的 VPN，不能直接连接公网云电脑服务商协议。
 
@@ -39,16 +39,14 @@ RGB 时序沿用 LVGL-S3 Wi-Fi 档：12 MHz PCLK，水平 48/40/8，垂直 2/40/
    保存后 S3 重启，之后独立联网，无需保持 USB 连接。这一步不会烧录固件。
 3. 电脑通过网线或 Wi-Fi 接入同一局域网。
    电脑软件保持打开即可。S3 首页自动列出电脑，显示“已配对”或“首次串流需要配对”。点击电脑：已配对直接串流；首次则显示 PIN，电脑自动弹窗输入，验证后自动开始。无需先在电脑选择 S3。
-4. 首次使用建议先在电脑设置显示器及 **400×240 / 25 FPS / 质量60**；之后从 S3 点选电脑即可自动开始，电脑“开始串流”作为备用入口。
-5. 在屏幕底部选择 LEFT / RIGHT / SCROLL / KEYBOARD，再在桌面区域操作。
-   LEFT/RIGHT 模式按住移动会拖动；SCROLL 模式上下划动发滚轮。
-   KEYBOARD 在 Windows 上启动系统屏幕键盘，其启动成功与否取决于系统组件及权限。
-6. 电脑端“停止 / 释放鼠标”停止连接。断线或触摸心跳消失会自动释放按键。
+4. S3 电脑卡片右侧“设置”保存显示器、画质、FPS、控制和输入模式；默认 **400×240 / 25 FPS / 质量60**。电脑端收起到托盘后仍能响应 S3。
+5. 轻点左键、单指移动拖动、长按右键；SCROLL 模式单指上下划动发滚轮。KEYBOARD 打开 S3 的英文/数字/符号输入页。
+6. 右下角 MENU 不依赖底栏，可暂停、继续、重连或断开；BACK 断开并返回首页。断开保留电脑程序，触摸心跳消失会自动释放按键。
 
 也可以在本地忽略文件 `include/config_secrets.h` 中定义 `MOONLIGHT_WIFI_SSID` 和
 `MOONLIGHT_WIFI_PASSWORD`，再编译；板内通过 USB 保存的配置优先。
 未配置时停留在等待配网页面；连接失败每15秒重试，并保留 USB 配网入口，不回退热点。
-DHCP 地址变化会重新建立 TCP 监听与发现服务，空闲屏幕显示新IP；电脑端重新搜索即可。
+DHCP 地址变化会重新建立 TCP 监听与发现服务；电脑端后台按完整设备身份自动更新地址，无需重填 IP 或重新配对。
 没有搜索结果时，可以手动填写屏幕上的IP，或 `moonlight-s3-xxxxxx.local`（依赖电脑的mDNS支持）。
 局域网广播使用 UDP47990，串流使用 TCP47989；跨VLAN、访客网络客户端隔离或防火墙拦截可能阻止发现。
 电脑可连接路由器的5GHz Wi-Fi或有线网络，只需与S3的2.4GHz网络互通。
@@ -95,7 +93,7 @@ python tools/verify_artifacts.py
 工具链：pioarduino 55.03.311 / Arduino 3.3.11 / ESP-IDF libs 5.5.5。
 项目独立板定义 `boards/moonlight-s3-n16r8.json` 明确锁定 ESP32-S3、16 MB Flash 和 OPI PSRAM。
 镜像 Flash header 沿用参考工程的 DIO，内部 memory_type=qio_opi。
-分区使用单 factory 应用和独立 ui_font 字库数据分区；未提供 OTA。
+分区使用单 factory 应用、独立 ui_font 字库和 64 KB ms3_store 配置分区；未提供 OTA。从旧版升级必须更新分区表与应用，标准上传或组合镜像会包含它。新配置分区自动迁移本项目旧配置，不清空共享 NVS 或其他项目数据，详见 [本轮记录](docs/SESSION_UX.md)。
 
 输出：
 

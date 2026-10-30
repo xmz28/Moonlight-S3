@@ -17,7 +17,7 @@ struct GlyphInfo { uint32_t start=0,end=0;uint8_t advance=22; };
 struct GlyphCache { int glyph=-1;GlyphInfo info; } glyphCache[16];
 uint32_t cacheNext=0;
 uint8_t glyphBitmap[1024];
-enum class Page { Home, Networks, Keyboard, Joining, Pairing, Paired };
+enum class Page { Home, Networks, Keyboard, Joining, Pairing, Paired, Result, Menu, Options, Text, Forget };
 Page page=Page::Home;
 struct Network { char ssid[33]; int rssi; wifi_auth_mode_t auth; } networks[20];
 int count=0,offset=0;
@@ -30,7 +30,12 @@ lan::JoinState lastJoin=lan::JoinState::Idle;
 lan::PlayState lastPlay=lan::PlayState::Idle;
 String lastPair;
 int deleteIndex=-1,computerOffset=0;
-uint32_t lastComputerRevision=0;
+uint32_t lastComputerRevision=0,editedOptions=0,actionNumber=0;
+char optionsHost[33]={},inputText[129]={};
+char forgetHost[33]={},forgetName[49]={};
+bool optionsFromMenu=false;
+Action pendingAction=Action::None;
+String lastMessage;
 uint16_t *canvas=nullptr;
 constexpr uint16_t Background=0x08c4,Card=0x1127,Line=0x21ed,White=0xef9e,Muted=0x8c55,Accent=0x3e78,Green=0x5e8f;
 
@@ -188,20 +193,53 @@ void draw() {
     for(int row=0;row<4;++row){
       lan::Computer c;if(!lan::computer(computerOffset+row,c))break;
       const int y=134+row*64;rectangle(24,y,752,58,Card);
-      text(40,y+1,c.name,White,false,420);text(40,y+29,c.ip,Muted);
-      text(440,y+12,c.paired?"已配对":"首次串流需要配对",c.paired?Green:Accent);
+      text(40,y+1,c.name,White,false,400);text(40,y+29,c.online?c.ip:"已保存的电脑",Muted);
+      text(416,y+12,!c.online?"离线":c.busy?"正在使用":c.paired?"已配对":c.saved?"授权需确认":"首次需配对",!c.online?Muted:c.paired?Green:Accent);
+      button(670,y+6,94,46,"设置");
     }
     button(24,410,180,48,"刷新电脑");
     if(lan::computerCount()>4){button(464,410,120,48,"上一页");button(600,410,120,48,"下一页");}
   } else if (page==Page::Pairing) {
     heading("Connecting",lan::selectedName());button(656,24,120,52,"返回");
     rectangle(24,120,752,218,Card);
-    const bool timeout=lan::playState()==lan::PlayState::TimedOut;
-    text(48,145,timeout?"电脑未响应，请返回后重试":lan::needsPin()?pairing::status():"正在连接已配对电脑...",White);
+    const auto phase=lan::playState();
+    const bool timeout=phase==lan::PlayState::TimedOut||phase==lan::PlayState::Declined||phase==lan::PlayState::Failed||phase==lan::PlayState::Disconnected||phase==lan::PlayState::Cancelled;
+    text(48,145,lan::message(),White);
     if(lan::needsPin()&&!timeout)text(300,207,pairing::pin(),Accent,true);
     text(48,288,lan::needsPin()?"在电脑弹窗输入此 PIN，成功后自动串流":"以后点击这台电脑即可直接串流",Muted);
+    if(timeout)button(24,364,200,58,"重新连接",true);
+  } else if(page==Page::Result){
+    heading("Connection",lan::selectedName());button(656,24,120,52,"返回");
+    rectangle(24,120,752,220,Card);text(48,150,lan::message(),Accent);
+    text(48,220,"原有配对和电脑桌面会保留",Muted);
+    button(24,364,200,58,"重新连接",true);button(248,364,200,58,"返回列表");
+  } else if(page==Page::Menu){
+    heading("Stream menu","本地菜单 · 投屏暂停，电脑上的程序继续运行");button(656,24,120,52,"继续");
+    button(24,122,224,58,"输入文字");button(272,122,244,58,(lan::options()&1)?"切换直接触摸":"切换触摸板");button(540,122,236,58,"电脑设置");
+    const char *labels[]={"Esc","Enter","Tab","Backspace","Ctrl+C","Ctrl+V","Ctrl+A","Alt+Tab"};
+    for(int i=0;i<8;++i)button(24+(i%4)*192,222+(i/4)*66,176,54,labels[i]);
+    button(24,390,224,58,"断开并返回");button(272,390,244,58,"重新连接");button(540,390,236,58,"继续桌面",true);
+  } else if(page==Page::Options){
+    heading("Computer settings","常用设置保存在这台 S3，按电脑分别记忆");button(656,24,120,52,"返回");
+    char label[64];
+    button(24,124,360,56,(editedOptions&1)?"输入：单指触摸板":"输入：直接触摸");
+    snprintf(label,sizeof(label),"显示器：%lu",(editedOptions>>8)&15);button(408,124,368,56,label);
+    button(24,204,360,56,(editedOptions&16)?"画面：流畅 400×240":"画面：清晰 800×480");
+    button(408,204,368,56,(editedOptions&4)?"底栏：显示":"底栏：隐藏");
+    button(24,284,360,56,(editedOptions&8)?"操作权限：允许触控":"操作权限：仅观看");
+    snprintf(label,sizeof(label),"JPEG 质量：%lu",(editedOptions>>16)&255);button(408,284,368,56,label);
+    button(24,394,360,58,optionsFromMenu?"保存并重新连接":"保存并返回",true);
+    if(notice.length())text(24,352,notice.c_str(),Accent);
+    snprintf(label,sizeof(label),"目标帧率：%lu FPS",(editedOptions>>24)&63);button(408,350,368,38,label);
+    text(408,404,"单指长按右键，无需双指",Muted);
+  } else if(page==Page::Forget){
+    heading("Forget computer","仅删除授权，不会隐藏局域网里仍在线的电脑");
+    text(36,138,forgetName,White);text(36,190,forgetHost,Muted);
+    text(36,248,"下次连接这台电脑，需要重新输入屏上 PIN",Muted);
+    if(notice.length())text(36,302,notice.c_str(),Accent);
+    button(24,390,360,58,"确认删除",true);button(408,390,368,58,"取消");
   } else if (page==Page::Paired) {
-    heading("Paired devices","删除后，下次串流需要重新配对");button(656,24,120,52,"返回");
+    heading("Paired devices",notice.length()?notice.c_str():"删除后，下次串流需要重新配对");button(656,24,120,52,"返回");
     if(!pairing::count())text(48,166,"暂无已配对电脑",Muted);
     for(int i=0;i<pairing::count();++i){const int y=128+i*76;
       rectangle(24,y,752,66,Card);text(40,y+2,pairing::peerName(i),White,false,620);
@@ -220,10 +258,11 @@ void draw() {
     button(24,402,166,54,scanning?"扫描中...":"重新扫描");button(202,402,166,54,"手动输入");
     button(460,402,112,54,"上一页");button(584,402,112,54,"下一页");
     char pages[24];snprintf(pages,sizeof(pages),"%d/%d",offset/4+1,max(1,(count+3)/4));text(712,414,pages,Muted);
-  } else if (page==Page::Keyboard) {
-    heading(editingSsid?"Network name":"Wi-Fi password",editingSsid?"输入 Wi-Fi 名称，然后输入密码":selected);
+  } else if (page==Page::Keyboard||page==Page::Text) {
+    heading(page==Page::Text?"Text input":editingSsid?"Network name":"Wi-Fi password",editingSsid?"输入 Wi-Fi 名称，然后输入密码":page==Page::Text?"英文、数字、符号；在电脑当前光标位置输入":selected);
     rectangle(24,103,752,44,Card);
-    if (editingSsid) text(38,110,selected);
+    if(page==Page::Text){const char *value=inputText;while(textWidth(value)>720&&*value)++value;text(38,110,value);}
+    else if (editingSsid) text(38,110,selected);
     else {
       char hidden[65]={};memset(hidden,'*',min<size_t>(strlen(password),40));
       const char *value=showPassword?password:hidden;
@@ -238,7 +277,7 @@ void draw() {
     if (notice.length()) { rectangle(16,365,768,30,Background);text(24,365,notice.c_str(),Accent); }
     button(24,406,108,54,uppercase?"abc":"ABC");button(142,406,108,54,symbols?"字母":"符号");
     button(260,406,108,54,"空格");button(378,406,108,54,"退格");
-    button(496,406,138,54,editingSsid?"下一步":"连接",true);button(644,406,132,54,"取消");
+    button(496,406,138,54,page==Page::Text?"发送":editingSsid?"下一步":"连接",true);button(644,406,132,54,page==Page::Text?"返回":"取消");
   } else {
     heading("Wi-Fi",selected);const auto state=lan::joinState();
     rectangle(24,124,752,208,Card);
@@ -259,7 +298,14 @@ bool begin() {
 }
 bool active() { return page!=Page::Home && page!=Page::Pairing; }
 void invalidate() { dirty=true; }
-void streamEnded(){page=Page::Home;lan::cancelPlay();dirty=true;}
+void streamEnded(){page=lan::playState()==lan::PlayState::Cancelled?Page::Home:Page::Result;dirty=true;}
+void connecting(bool accepted){page=accepted?Page::Pairing:Page::Result;dirty=true;}
+void openMenu(){page=Page::Menu;armed=false;wasDown=true;dirty=true;}
+void openText(){openMenu();page=Page::Text;inputText[0]=0;symbols=uppercase=false;editingSsid=false;notice="";}
+bool localMenu(){return page==Page::Menu||page==Page::Text||(page==Page::Options&&optionsFromMenu);}
+Action takeAction(){auto a=pendingAction;pendingAction=Action::None;return a;}
+const char *textValue(){return inputText;}
+uint32_t actionValue(){return actionNumber;}
 void poll(bool allowed) {
   if (!allowed) return; // No scan polling, allocation, text drawing or refresh during video.
   if (requestScan) { requestScan=false;startScan(); }
@@ -273,6 +319,7 @@ void poll(bool allowed) {
   const auto revision=lan::computerRevision();
   if(revision!=lastComputerRevision){lastComputerRevision=revision;computerOffset=min(computerOffset,max(0,((lan::computerCount()-1)/4)*4));if(page==Page::Home)dirty=true;}
   if(page==Page::Pairing && lan::playState()==lan::PlayState::Idle && !lan::needsPin()){page=Page::Home;dirty=true;}
+  const String status=lan::message();if(status!=lastMessage){lastMessage=status;dirty=true;}
   if (dirty) draw();
 }
 void touch(const touch::State &t) {
@@ -282,19 +329,55 @@ void touch(const touch::State &t) {
   if (page==Page::Home) {
     if (hit(610,24,166,52,t)) {
       lan::cancelPlay();page=Page::Networks;lan::setConfiguring(true);requestScan=dirty=true;
-    } else if(hit(432,24,162,52,t)){page=Page::Paired;deleteIndex=-1;dirty=true;}
+    } else if(hit(432,24,162,52,t)){page=Page::Paired;deleteIndex=-1;notice="";dirty=true;}
     else if(hit(24,410,180,48,t)){lan::scanComputers();computerOffset=0;dirty=true;}
     else if(hit(464,410,120,48,t)){computerOffset=max(0,computerOffset-4);dirty=true;}
     else if(hit(600,410,120,48,t)){if(computerOffset+4<lan::computerCount())computerOffset+=4;dirty=true;}
     else for(int row=0;row<4;++row)if(hit(24,134+row*64,752,58,t)){
-      lan::Computer c;if(lan::computer(computerOffset+row,c)&&lan::requestPlay(c.id)){page=Page::Pairing;dirty=true;}
+      lan::Computer c;if(lan::computer(computerOffset+row,c)){
+        if(t.x>=670){strlcpy(optionsHost,c.id,33);editedOptions=lan::options(c.id);optionsFromMenu=false;page=Page::Options;}
+        else page=lan::requestPlay(c.id)?Page::Pairing:Page::Result;
+        dirty=true;
+      }
     }
   } else if(page==Page::Pairing) {
     if(hit(656,24,120,52,t)){lan::cancelPlay();page=Page::Home;dirty=true;}
+    else if(hit(24,364,200,58,t)){page=lan::requestPlay(lan::selectedId())?Page::Pairing:Page::Result;dirty=true;}
+  } else if(page==Page::Result){
+    if(hit(656,24,120,52,t)||hit(248,364,200,58,t)){lan::cancelPlay();page=Page::Home;dirty=true;}
+    else if(hit(24,364,200,58,t)){page=lan::requestPlay(lan::selectedId())?Page::Pairing:Page::Result;dirty=true;}
+  } else if(page==Page::Menu){
+    if(hit(656,24,120,52,t)||hit(540,390,236,58,t)){pendingAction=Action::Resume;page=Page::Pairing;}
+    else if(hit(24,390,224,58,t)){pendingAction=Action::Disconnect;page=Page::Home;}
+    else if(hit(272,390,244,58,t)){pendingAction=Action::Reconnect;page=Page::Pairing;}
+    else if(hit(24,122,224,58,t)){page=Page::Text;inputText[0]=0;symbols=uppercase=false;editingSsid=false;notice=(lan::options()&8)?"":"仅观看模式，请在电脑设置允许触控";}
+    else if(hit(272,122,244,58,t)){uint32_t value=lan::options()^1;if(lan::saveOptions(lan::selectedId(),value)){actionNumber=value&1;pendingAction=Action::Mode;}}
+    else if(hit(540,122,236,58,t)){strlcpy(optionsHost,lan::selectedId(),33);editedOptions=lan::options();optionsFromMenu=true;page=Page::Options;}
+    else for(int i=0;i<8;++i)if((lan::options()&8)&&hit(24+(i%4)*192,222+(i/4)*66,176,54,t)){actionNumber=i;pendingAction=Action::Key;}
+    dirty=true;
+  } else if(page==Page::Options){
+    if(hit(656,24,120,52,t)){page=optionsFromMenu?Page::Menu:Page::Home;}
+    else if(hit(24,124,360,56,t))editedOptions^=1;
+    else if(hit(408,124,368,56,t)){uint32_t monitor=((editedOptions>>8)&15)+1,maxMonitors=1;for(int i=0;i<lan::computerCount();++i){lan::Computer c;if(lan::computer(i,c)&&!strcmp(c.id,optionsHost))maxMonitors=c.monitors;}if(monitor>maxMonitors)monitor=1;editedOptions=(editedOptions&~(15UL<<8))|(monitor<<8);}
+    else if(hit(24,204,360,56,t))editedOptions^=16;
+    else if(hit(408,204,368,56,t))editedOptions^=4;
+    else if(hit(24,284,360,56,t))editedOptions^=8;
+    else if(hit(408,284,368,56,t)){uint32_t quality=((editedOptions>>16)&255)+20;if(quality>80)quality=40;editedOptions=(editedOptions&~(255UL<<16))|(quality<<16);}
+    else if(hit(408,350,368,38,t)){uint32_t fps=((editedOptions>>24)&63)+5;if(fps>30)fps=10;editedOptions=(editedOptions&~(63UL<<24))|(fps<<24);}
+    else if(hit(24,394,360,58,t)){if(lan::saveOptions(optionsHost,editedOptions)){if(optionsFromMenu){pendingAction=Action::Reconnect;page=Page::Pairing;}else page=Page::Home;}else notice="设置保存失败，请重试";}
+    dirty=true;
+  } else if(page==Page::Forget){
+    if(hit(408,390,368,58,t)){page=Page::Paired;notice="";}
+    else if(hit(24,390,360,58,t)){
+      if(pairing::forget(forgetHost)){lan::cancelPlay();lan::scanComputers();page=Page::Paired;notice="授权已删除，下次连接需要 PIN";}
+      else notice=pairing::status();
+      Serial.printf("Pairing delete: %s\n",pairing::paired(forgetHost)?"failed":"removed");
+    }
+    dirty=true;
   } else if(page==Page::Paired) {
     if(hit(656,24,120,52,t)){page=Page::Home;deleteIndex=-1;dirty=true;}
     else for(int i=0;i<pairing::count();++i)if(hit(642,136+i*76,120,48,t)){
-      if(deleteIndex==i){char id[33];strlcpy(id,pairing::peerId(i),sizeof(id));pairing::forget(id);lan::scanComputers();deleteIndex=-1;}else deleteIndex=i;
+      strlcpy(forgetHost,pairing::peerId(i),sizeof(forgetHost));strlcpy(forgetName,pairing::peerName(i),sizeof(forgetName));page=Page::Forget;notice="";
       dirty=true;break;
     }
   } else if (page==Page::Networks) {
@@ -311,8 +394,10 @@ void touch(const touch::State &t) {
       openNetwork=n.auth==WIFI_AUTH_OPEN;editingSsid=false;showPassword=false;symbols=uppercase=false;
       page=Page::Keyboard;notice=openNetwork?"开放网络，可直接点连接":"请输入密码，连接成功后自动保存";dirty=true;break;
     }
-  } else if (page==Page::Keyboard) {
-    if (!editingSsid && hit(648,105,126,40,t)) showPassword=!showPassword;
+  } else if (page==Page::Keyboard||page==Page::Text) {
+    if(page==Page::Text&&hit(644,406,132,54,t)){page=Page::Menu;dirty=true;return;}
+    if(page==Page::Text&&hit(496,406,138,54,t)){if(!(lan::options()&8))notice="仅观看模式，未发送文字";else if(!inputText[0])notice="请先输入文字";else{pendingAction=Action::Text;notice="已提交文字";}dirty=true;return;}
+    if (page==Page::Keyboard&&!editingSsid && hit(648,105,126,40,t)) showPassword=!showPassword;
     else if (hit(24,406,108,54,t)) uppercase=!uppercase;
     else if (hit(142,406,108,54,t)) symbols=!symbols;
     else if (hit(644,406,132,54,t)) { memset(password,0,sizeof(password));page=Page::Networks;notice="轻触网络名称以连接"; }
@@ -320,7 +405,7 @@ void touch(const touch::State &t) {
       if (editingSsid) { if (selected[0]) { editingSsid=false;notice="输入密码；开放网络可留空"; } }
       else connect();
     } else {
-      char *value=editingSsid?selected:password;const size_t capacity=editingSsid?sizeof(selected):sizeof(password);size_t size=strlen(value);
+      char *value=page==Page::Text?inputText:editingSsid?selected:password;const size_t capacity=page==Page::Text?sizeof(inputText):editingSsid?sizeof(selected):sizeof(password);size_t size=strlen(value);
       if (hit(378,406,108,54,t)) { if (size) value[size-1]=0; }
       else {
         char chosen=hit(260,406,108,54,t)?' ':0;

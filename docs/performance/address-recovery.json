@@ -1,0 +1,15 @@
+{
+  "old_hint": "192.168.137.40",
+  "resolved_ip": "192.168.137.8",
+  "device_id": "b81f3fc4c470",
+  "authenticated_without_pin": true,
+  "existing_credentials_preserved": true,
+  "software_tests": 48,
+  "packaged_gui_smoke_exit": 0,
+  "gui_auto_updated_saved_ip": true,
+  "single_instance_verified": true,
+  "identity_and_key_preserved": true,
+  "user_confirmed_reboot_connect_without_ip_or_pin": true,
+  "firmware_changed": false,
+  "performance_remeasured": false
+}

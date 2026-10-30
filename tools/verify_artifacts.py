@@ -29,6 +29,10 @@ for offset in range(0,len(parts),32):
     assert start+size<=16*1024*1024
     partitions.append(dict(name=label,type=kind,subtype=subtype,offset=start,size=size))
 application=next(p for p in partitions if p["type"]==0)
+ordered=sorted(partitions,key=lambda p:p['offset'])
+assert all(a['offset']+a['size']<=b['offset'] for a,b in zip(ordered,ordered[1:])), 'Partitions overlap'
+store=next(p for p in partitions if p['name']=='ms3_store')
+assert (store['offset'],store['size'],store['type'],store['subtype'])==(0x910000,0x10000,1,2)
 assert application["offset"]==0x10000 and len(app)<=application["size"]
 assert factory[:len(boot)]==boot
 assert factory[0x8000:0x8000+len(parts)]==parts

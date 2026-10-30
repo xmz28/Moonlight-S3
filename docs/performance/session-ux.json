@@ -1,0 +1,22 @@
+{
+  "software_tests": 62,
+  "firmware_app_bytes": 1200688,
+  "old_nvs_used_entries": 504,
+  "old_nvs_total_entries": 630,
+  "new_nvs_bytes": 65536,
+  "new_nvs_used_entries": 39,
+  "new_nvs_total_entries": 2016,
+  "wifi_blob_preserved": true,
+  "new_pairing_matches_pc": true,
+  "reboot_signed_discovery_verified": true,
+  "user_confirmed": [
+    "connection",
+    "menu_resume_disconnect_reconnect",
+    "single_touch_tap_drag_long_press_trackpad",
+    "tray_background_connection",
+    "text_or_shortcuts",
+    "pairing_delete",
+    "pin_cancel_feedback",
+    "pairing_retry"
+  ]
+}

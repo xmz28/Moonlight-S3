@@ -10,6 +10,7 @@
 #include "config.h"
 #include "lan.h"
 #include "pairing.h"
+#include "storage.h"
 
 namespace lan {
 namespace {
@@ -24,7 +25,12 @@ uint32_t playId=0,playStarted=0;
 PlayState playing=PlayState::Idle;
 Computer computers[8];int computersCount=0;uint32_t revision=0;
 char selectedComputer[33]={},selectedComputerName[49]={};
-bool pinRequired=false;
+bool pinRequired=false,localPaused=false;
+uint32_t reason=0;
+struct Profile {char host[33];uint32_t value;};
+struct Profiles {uint32_t version=1;Profile entries[8]={};} profiles;
+constexpr uint32_t DefaultOptions=(25UL<<24)|(60UL<<16)|(1UL<<8)|28;
+const char *failure="";
 NetworkUDP discovery;
 char id[13], hostname[32], line[224];
 size_t lineSize=0;
@@ -72,7 +78,7 @@ void command() {
   if (len==64) for (char c:next.password) if (c && hex(c)<0) validPsk=false;
   if (!ok || (len && len<8) || !validPsk) { Serial.println("MS3WIFI1 ERROR CREDENTIALS"); return; }
   Preferences prefs;
-  if (!prefs.begin("moonlight",false)) { Serial.println("MS3WIFI1 ERROR STORAGE"); return; }
+  if (!prefs.begin("moonlight",false,storage::Partition)) { Serial.println("MS3WIFI1 ERROR STORAGE"); return; }
   const bool saved=prefs.putBytes("wifi",&next,sizeof(next))==sizeof(next);
   prefs.end();
   if (!saved) { Serial.println("MS3WIFI1 ERROR STORAGE"); return; }
@@ -106,33 +112,49 @@ void advertise() {
   }
 }
 void hostAnnouncement(char *request) {
-  char *fields[9]={},*save=nullptr;int count=0;
-  // Exactly seven fields plus signature, bounded before tokenization.
-  for(char *part=strtok_r(request," ",&save);part&&count<9;part=strtok_r(nullptr," ",&save))fields[count++]=part;
-  if(count!=8||strcmp(fields[0],"MS3HOST2")||strlen(fields[1])!=32||strlen(fields[2])!=32||strcmp(fields[3],id)||
-     (strcmp(fields[4],"0")&&strcmp(fields[4],"1"))||strlen(fields[5])>96||strcmp(fields[6],"1"))return;
-  for(int i=0;i<32;++i)if(hex(fields[1][i])<0||hex(fields[2][i])<0)return;
-  char name[49]={};if(!decodeHex(fields[5],name,sizeof(name))||!name[0])return;
+  char *f[13]={},*save=nullptr;int count=0;
+  for(char *part=strtok_r(request," ",&save);part&&count<13;part=strtok_r(nullptr," ",&save))f[count++]=part;
+  const bool modern=count==12&&!strcmp(f[0],"MS3HOST3");
+  const bool legacy=count==8&&!strcmp(f[0],"MS3HOST2");
+  if((!modern&&!legacy)||strlen(f[1])!=32||strlen(f[2])!=32||strcmp(f[3],id)||
+     (strcmp(f[4],"0")&&strcmp(f[4],"1"))||strlen(f[5])>96)return;
+  for(int i=0;i<32;++i)if(hex(f[1][i])<0||hex(f[2][i])<0)return;
+  if(modern&&((strcmp(f[6],"I")&&strcmp(f[6],"B"))||strlen(f[8])!=8))return;
+  char name[49]={};if(!decodeHex(f[5],name,sizeof(name))||!name[0])return;
   for(const unsigned char *c=(const unsigned char *)name;*c;++c)if(*c<32||*c==127)return;
-  char prefix[288],expected[65];
-  const int length=snprintf(prefix,sizeof(prefix),"MS3HOST2 %s %s %s %s %s 1",fields[1],fields[2],id,fields[4],fields[5]);
-  pairing::signature(fields[2],prefix,length,expected);
-  bool trusted=false;
-  if(!strcmp(fields[4],"1")&&expected[0]&&strlen(fields[7])==64) {
-    uint8_t difference=0;for(int i=0;i<64;++i)difference|=expected[i]^fields[7][i];trusted=!difference;
-  }
-  int index=-1;for(int i=0;i<computersCount;++i)if(!strcmp(computers[i].id,fields[2])){index=i;break;}
+  char prefix[320],expected[65];
+  const int length=modern?snprintf(prefix,sizeof(prefix),"MS3HOST3 %s %s %s %s %s %s %s %s %s %s",f[1],f[2],id,f[4],f[5],f[6],f[7],f[8],f[9],f[10]):
+    snprintf(prefix,sizeof(prefix),"MS3HOST2 %s %s %s %s %s 1",f[1],f[2],id,f[4],f[5]);
+  pairing::signature(f[2],prefix,length,expected);const char *signature=f[modern?11:7];bool trusted=false;
+  if(!strcmp(f[4],"1")&&expected[0]&&strlen(signature)==64){uint8_t d=0;for(int i=0;i<64;++i)d|=expected[i]^signature[i];trusted=!d;}
+  int index=-1;for(int i=0;i<computersCount;++i)if(!strcmp(computers[i].id,f[2])){index=i;break;}
   if(index<0&&computersCount<8)index=computersCount++;
-  if(index>=0) {
-    auto &c=computers[index];const String ip=discovery.remoteIP().toString();
-    if(strcmp(c.id,fields[2])||strcmp(c.name,name)||strcmp(c.ip,ip.c_str())||c.paired!=trusted)++revision;
-    strlcpy(c.id,fields[2],sizeof(c.id));strlcpy(c.name,name,sizeof(c.name));strlcpy(c.ip,ip.c_str(),sizeof(c.ip));c.paired=trusted;c.seen=millis();
+  if(index>=0){auto &c=computers[index];const String ip=discovery.remoteIP().toString();bool busy=modern&&!strcmp(f[6],"B");
+    if(strcmp(c.id,f[2])||strcmp(c.name,name)||strcmp(c.ip,ip.c_str())||c.paired!=trusted||c.busy!=busy||!c.online)++revision;
+    strlcpy(c.id,f[2],sizeof(c.id));strlcpy(c.name,name,sizeof(c.name));strlcpy(c.ip,ip.c_str(),sizeof(c.ip));
+    c.paired=trusted;c.busy=busy;c.online=true;c.saved=pairing::paired(c.id);c.seen=millis();
+    c.monitors=modern?constrain(atoi(f[10]),1,8):1;
   }
-  const bool chosen=playId&&!strcmp(selectedComputer,fields[2]);
-  const bool authorized=trusted&&(!chosen||!pinRequired);
-  char response[224];const int n=snprintf(response,sizeof(response),"MS3DEV2 %s %s %s %08lx %d",fields[1],fields[2],id,chosen?playId:0UL,authorized?1:0);
-  char signature[65]={};if(authorized)pairing::signature(fields[2],response,n,signature);
-  snprintf(response+n,sizeof(response)-n," %s",signature[0]?signature:"-");
+  const bool chosen=playId&&!strcmp(selectedComputer,f[2]);
+  if(chosen&&trusted)pinRequired=false;
+  if(modern&&chosen&&strtoul(f[8],nullptr,16)==playId&&(trusted||pinRequired)){
+    const int phase=atoi(f[7]);
+    if(playing!=PlayState::Cancelled&&playing!=PlayState::Disconnected&&playing!=PlayState::Declined&&playing!=PlayState::Failed&&playing!=PlayState::TimedOut&&
+       (playing!=PlayState::Streaming||phase>=7)){
+      reason=constrain(atoi(f[9]),0,9);
+      switch(phase){case 1:playing=PlayState::Accepted;break;case 2:playing=PlayState::Pin;break;case 3:playing=PlayState::Verifying;break;
+        case 4:playing=PlayState::Preparing;break;case 5:if(playing!=PlayState::Streaming)playing=PlayState::FirstFrame;break;
+        case 7:playing=PlayState::Declined;break;case 8:playing=PlayState::Failed;break;
+        case 9:playing=PlayState::Disconnected;break;case 10:playing=PlayState::Cancelled;break;}
+    }
+  }
+  const bool authorized=trusted&&(!chosen||!pinRequired||playing==PlayState::Streaming||playing==PlayState::FirstFrame);
+  const unsigned flow=playing==PlayState::Cancelled?3:playing==PlayState::Streaming?2:
+    (playing==PlayState::Declined||playing==PlayState::Failed||playing==PlayState::Disconnected||playing==PlayState::TimedOut)?4:1;
+  char response[256];const int n=modern?snprintf(response,sizeof(response),"MS3DEV3 %s %s %s %08lx %d %08lx %u",f[1],f[2],id,chosen?playId:0UL,authorized?1:0,options(f[2]),chosen?flow:0):
+    snprintf(response,sizeof(response),"MS3DEV2 %s %s %s %08lx %d",f[1],f[2],id,chosen?playId:0UL,authorized?1:0);
+  char mac[65]={};if(authorized)pairing::signature(f[2],response,n,mac);
+  snprintf(response+n,sizeof(response)-n," %s",mac[0]?mac:"-");
   if(discovery.beginPacket(discovery.remoteIP(),discovery.remotePort())){discovery.write((const uint8_t *)response,strlen(response));discovery.endPacket();}
 }
 void discoverPoll() {
@@ -140,7 +162,7 @@ void discoverPoll() {
   if (!size) return;
   char request[384]={};
   if(size>0&&size<int(sizeof(request))&&size!=41) {
-    if(discovery.read(request,size)==size&&!strncmp(request,"MS3HOST2 ",9))hostAnnouncement(request);
+    if(discovery.read(request,size)==size&&(!strncmp(request,"MS3HOST2 ",9)||!strncmp(request,"MS3HOST3 ",9)))hostAnnouncement(request);
     else discovery.clear();
     return;
   }
@@ -162,6 +184,7 @@ void begin() {
   WiFi.onEvent([](arduino_event_id_t event,arduino_event_info_t) {
     if (event==ARDUINO_EVENT_WIFI_STA_CONNECTED) associations.fetch_add(1,std::memory_order_relaxed);
   });
+  WiFi.persistent(false); // App credentials live in our dedicated NVS, not the shared Wi-Fi store.
   WiFi.mode(WIFI_STA); // Never creates a SoftAP, including provisioning/recovery.
   const String mac=WiFi.macAddress();
   String compact=mac; compact.replace(":",""); compact.toLowerCase();
@@ -171,7 +194,7 @@ void begin() {
   strlcpy(credentials.ssid,config::WifiSsid,sizeof(credentials.ssid));
   strlcpy(credentials.password,config::WifiPassword,sizeof(credentials.password));
   Preferences prefs;
-  if (prefs.begin("moonlight",true)) {
+  if (prefs.begin("moonlight",true,storage::Partition)) {
     Credentials stored={};
     if (prefs.getBytesLength("wifi")==sizeof(stored) &&
         prefs.getBytes("wifi",&stored,sizeof(stored))==sizeof(stored) &&
@@ -181,6 +204,7 @@ void begin() {
   }
   if (credentials.ssid[0]) WiFi.begin(credentials.ssid,credentials.password);
   else Serial.println("LAN: configure WiFi using USB tool; no hotspot is created");
+  Preferences uiPrefs;if(uiPrefs.begin("ms3ui",true,storage::Partition)){Profiles stored;if(uiPrefs.getBytesLength("profiles")==sizeof(stored)&&uiPrefs.getBytes("profiles",&stored,sizeof(stored))==sizeof(stored)&&stored.version==1)profiles=stored;uiPrefs.end();}
   lastRetry=millis();
 }
 bool connected() { return online; }
@@ -206,25 +230,47 @@ void setConfiguring(bool enabled) {
   }
 }
 PlayState playState() { return playing; }
-void scanComputers(){computersCount=0;memset(computers,0,sizeof(computers));++revision;}
+void scanComputers(){for(int i=0;i<computersCount;++i)computers[i].seen=0; ++revision;}
 int computerCount(){return computersCount;}
 bool computer(int index,Computer &out){if(index<0||index>=computersCount)return false;out=computers[index];out.paired=out.paired&&pairing::paired(out.id);return true;}
 uint32_t computerRevision(){return revision;}
 const char *selectedName(){return selectedComputerName;}
 bool needsPin(){return pinRequired;}
-void cancelPlay(){playId=0;playing=PlayState::Idle;pairing::cancel();}
+void cancelPlay(){playing=PlayState::Cancelled;reason=8;pairing::cancel();}
+const char *selectedId(){return selectedComputer;}
+uint32_t requestId(){return playId;}
+uint32_t options(const char *host){host=host?host:selectedComputer;for(const auto &p:profiles.entries)if(!strcmp(p.host,host))return p.value;return DefaultOptions;}
+bool saveOptions(const char *host,uint32_t value){int index=-1;for(int i=0;i<8;++i)if(!strcmp(profiles.entries[i].host,host)){index=i;break;}
+  if(index<0)for(int i=0;i<8;++i)if(!profiles.entries[i].host[0]){index=i;break;}if(index<0)return false;
+  Profiles next=profiles;strlcpy(next.entries[index].host,host,33);next.entries[index].value=value;
+  Preferences p;if(!p.begin("ms3ui",false,storage::Partition))return false;bool ok=p.putBytes("profiles",&next,sizeof(next))==sizeof(next);p.end();if(ok)profiles=next;return ok;
+}
+const char *message(){if(failure[0])return failure;switch(playing){
+  case PlayState::Waiting:return "等待电脑响应";case PlayState::Accepted:return "电脑已响应";case PlayState::Pin:return pairing::status();
+  case PlayState::Verifying:return "正在验证配对";case PlayState::Preparing:return "正在准备桌面";case PlayState::FirstFrame:return "等待桌面首帧";
+  case PlayState::Streaming:return localPaused?"投屏已暂停，电脑桌面保持原状":"正在串流";case PlayState::Declined:return "电脑已取消配对，可点击重试";
+  case PlayState::Cancelled:return "已取消连接";case PlayState::TimedOut:return "电脑未响应，请检查软件是否运行";
+  case PlayState::Failed:case PlayState::Disconnected:switch(reason){case 2:return "授权验证失败，请重新确认配对";case 3:return "电脑正被其他设备使用";case 4:return "电脑抓屏失败，请检查显示器";case 5:return "电脑拒绝输入，请检查权限";case 6:return "画面解码失败，可重连";case 7:return "配对已过期，请重试";case 8:return "电脑已停止投屏";case 9:return "电脑软件与设备版本不匹配";default:return "网络已断开，可重新连接";}
+  default:return "选择电脑开始串流";}}
+bool authorizeRequest(const char *host,uint32_t request){return request&&request==playId&&!strcmp(host,selectedComputer)&&
+  playing!=PlayState::Cancelled&&playing!=PlayState::Declined&&playing!=PlayState::Failed&&playing!=PlayState::Disconnected&&playing!=PlayState::TimedOut;}
+void setLocalPause(bool value){localPaused=value;}
 bool requestPlay(const char *computerId) {
-  if (!online || configuring) return false;
+  char target[33];strlcpy(target,computerId,sizeof(target));strlcpy(selectedComputer,target,sizeof(selectedComputer));
+  failure="";if (!online || configuring){failure="请先连接 Wi-Fi";return false;}
   int index=-1;for(int i=0;i<computersCount;++i)if(!strcmp(computers[i].id,computerId)&&millis()-computers[i].seen<10000){index=i;break;}
-  if(index<0)return false;
-  const auto &c=computers[index];strlcpy(selectedComputer,c.id,sizeof(selectedComputer));strlcpy(selectedComputerName,c.name,sizeof(selectedComputerName));
+  if(index<0){failure="电脑已离线，请检查软件是否运行";return false;}
+  const auto &c=computers[index];
+  if(c.busy){failure="电脑正被其他设备使用，请稍后重试";return false;}strlcpy(selectedComputer,c.id,sizeof(selectedComputer));strlcpy(selectedComputerName,c.name,sizeof(selectedComputerName));
   pinRequired=!(c.paired&&pairing::paired(c.id));
-  if(pinRequired){pairing::open(c.id,c.name);if(!pairing::enabled())return false;}else pairing::cancel();
+  if(pinRequired){pairing::open(c.id,c.name);if(!pairing::enabled()){failure=pairing::status();return false;}}else pairing::cancel();
   do { playId=esp_random(); } while (!playId);
-  playStarted=millis();playing=PlayState::Waiting;
+  playStarted=millis();reason=0;localPaused=false;playing=PlayState::Waiting;
   return true;
 }
-void streamStarted() { playId=0;playing=PlayState::Idle; }
+void streamStarted(){playing=PlayState::FirstFrame;pinRequired=false;localPaused=false;}
+void frameShown(){if(playing==PlayState::FirstFrame)playing=PlayState::Streaming;}
+void streamEnded(uint32_t error){if(playing!=PlayState::Cancelled&&playing!=PlayState::Declined&&playing!=PlayState::Failed&&playing!=PlayState::Disconnected&&playing!=PlayState::TimedOut){reason=error;playing=PlayState::Disconnected;}}
 bool join(const char *ssid,const char *password) {
   const size_t a=strlen(ssid),b=strlen(password);
   if (!configuring || !a || a>32 || b>64 || (b && b<8)) return false;
@@ -246,8 +292,12 @@ String status() {
 }
 bool poll() {
   serialPoll();
-  if(playId&&(millis()-playStarted>(pinRequired?120000U:15000U)||(pinRequired&&!pairing::enabled()&&!pairing::paired(selectedComputer)))){playId=0;playing=PlayState::TimedOut;}
-  for(int i=0;i<computersCount;)if(millis()-computers[i].seen>10000){for(int j=i+1;j<computersCount;++j)computers[j-1]=computers[j];--computersCount;++revision;}else ++i;
+  if(playId&&playing!=PlayState::Streaming&&playing!=PlayState::Cancelled&&playing!=PlayState::Disconnected&&playing!=PlayState::Declined&&playing!=PlayState::Failed&&
+      millis()-playStarted>(pinRequired?120000U:playing==PlayState::Waiting?15000U:60000U)){playing=PlayState::TimedOut;pairing::cancel();}
+  for(int p=0;p<pairing::count();++p){const char *host=pairing::peerId(p);bool found=false;for(int i=0;i<computersCount;++i)if(!strcmp(computers[i].id,host)){computers[i].saved=true;found=true;break;}
+    if(!found&&computersCount<8){auto &c=computers[computersCount++];c=Computer{};strlcpy(c.id,host,33);strlcpy(c.name,pairing::peerName(p),49);c.saved=true;++revision;}}
+  for(int i=0;i<computersCount;){auto &c=computers[i];c.saved=pairing::paired(c.id);if(c.online&&(!c.seen||millis()-c.seen>10000)){c.online=false;c.busy=false;++revision;}
+    if(!c.online&&!c.saved){for(int j=i+1;j<computersCount;++j)computers[j-1]=computers[j];--computersCount;++revision;}else ++i;}
   const bool now=WiFi.status()==WL_CONNECTED && uint32_t(WiFi.localIP())!=0;
   const IPAddress ip=now?WiFi.localIP():IPAddress();
   const bool changed=now!=online || ip!=address;
@@ -255,7 +305,7 @@ bool poll() {
     if (now && associations.load(std::memory_order_relaxed)!=joinAssociation && WiFi.SSID()==candidate.ssid) {
       Preferences prefs;
       bool saved=false;
-      if (prefs.begin("moonlight",false)) {
+      if (prefs.begin("moonlight",false,storage::Partition)) {
         saved=prefs.putBytes("wifi",&candidate,sizeof(candidate))==sizeof(candidate);
         prefs.end();
       }

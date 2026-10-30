@@ -1,6 +1,8 @@
 #include "pairing.h"
 #include <WiFi.h>
 #include <Preferences.h>
+#include <nvs.h>
+#include "storage.h"
 #include <esp_random.h>
 #include <mbedtls/bignum.h>
 #include <mbedtls/md.h>
@@ -27,6 +29,7 @@ int find(const char *host) {
   return -1;
 }
 const char *message="尚未配对";
+char storageError[112]={};
 uint32_t opened=0;
 unsigned attempts=0;
 bool window=false,srpPending=false,authPending=false;
@@ -65,14 +68,19 @@ bool verifier(Int &N,Int &g,Int &v,Int &k) {
   OK(mbedtls_mpi_exp_mod(&v,&g,&x,&N,nullptr));return true;
 }
 bool save(const Table &next) {
-  Preferences p;if(!p.begin("ms3pair",false))return false;
-  const bool result=p.putBytes("peers",&next,sizeof(next))==sizeof(next);p.end();return result;
+  nvs_handle_t handle=0;esp_err_t err=nvs_open_from_partition(storage::Partition,"ms3pair",NVS_READWRITE,&handle);
+  if(err==ESP_OK)err=nvs_set_blob(handle,"peers",&next,sizeof(next));
+  if(err==ESP_OK)err=nvs_commit(handle);
+  if(err==ESP_OK){Table check;size_t length=sizeof(check);err=nvs_get_blob(handle,"peers",&check,&length);if(err==ESP_OK&&(length!=sizeof(next)||memcmp(&check,&next,sizeof(next))))err=ESP_FAIL;}
+  if(handle)nvs_close(handle);
+  if(err!=ESP_OK){nvs_stats_t stats={};nvs_get_stats(storage::Partition,&stats);Serial.printf("Pairing storage: %s used=%u free=%u total=%u\n",esp_err_to_name(err),stats.used_entries,stats.free_entries,stats.total_entries);snprintf(storageError,sizeof(storageError),"保存失败：%s",esp_err_to_name(err));message=storageError;}
+  return err==ESP_OK;
 }
 }
 void begin() {
   String id=WiFi.macAddress();id.replace(":","");id.toLowerCase();strlcpy(device,id.c_str(),sizeof(device));
   Preferences p;
-  if(p.begin("ms3pair",true)) {
+  if(p.begin("ms3pair",true,storage::Partition)) {
     Table t;
     if(p.getBytesLength("peers")==sizeof(t)&&p.getBytes("peers",&t,sizeof(t))==sizeof(t)&&t.version==2) {
       for(auto &r:t.records)if(r.host[0]&&(r.host[32]||r.key[32]||r.name[48]||!validHex((uint8_t *)r.host,32)||!validHex((uint8_t *)r.key,32)))memset(&r,0,sizeof(r));
@@ -98,7 +106,7 @@ bool enabled(){return window && millis()-opened<120000 && attempts<5;}
 void poll(){if(window && (millis()-opened>=120000 || (attempts>=5&&!srpPending))){cancel();message="配对已关闭，请在屏上重新开启";}}
 const char *pin(){return enabled()?code:"----";}
 const char *status(){return message;}
-bool forget(const char *host){int index=find(host);if(index<0)return false;Table next=stored;memset(&next.records[index],0,sizeof(Record));if(!save(next)){message="删除失败，请重试";return false;}stored=next;cancel();message="已删除电脑授权";return true;}
+bool forget(const char *host){int index=find(host);if(index<0){message="此电脑授权已不存在";return false;}Table next=stored;memset(&next.records[index],0,sizeof(Record));if(!save(next))return false;stored=next;cancel();message="已删除电脑授权";return true;}
 bool start(const uint8_t *host,uint8_t out[288]) {
   abort();if(!enabled()||!validHex(host,32)||memcmp(host,targetHost,32))return false;
   ++attempts; // Includes interrupted attempts; reopening requires a physical screen action.
