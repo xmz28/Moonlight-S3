@@ -3,3 +3,5 @@
 include/config_secrets.h
 CONNECTION.txt
 __pycache__/
+platformio.local.ini
+release/

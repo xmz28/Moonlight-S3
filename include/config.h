@@ -1,6 +1,8 @@
 #pragma once
 #include <stdint.h>
+#if __has_include("config_secrets.h")
 #include "config_secrets.h"
+#endif
 #ifndef MOONLIGHT_WIFI_SSID
 #define MOONLIGHT_WIFI_SSID ""
 #endif

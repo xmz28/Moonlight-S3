@@ -1,5 +1,6 @@
 """Offline artifact checks. Never opens a serial port or flashes a device."""
 import hashlib
+import argparse
 import json
 from pathlib import Path
 import re
@@ -7,7 +8,9 @@ import struct
 
 root=Path(__file__).resolve().parents[1]
 build=root/".pio/build/moonlight_s3"
-host=Path(r"C:\Users\10145294\Documents\MySoftware\Moonlight_S3_Host")
+parser=argparse.ArgumentParser(description=__doc__)
+parser.add_argument("--host-dir", type=Path, help="Optional host checkout for local credential checks")
+args=parser.parse_args()
 app=(build/"firmware.bin").read_bytes()
 factory=(build/"firmware.factory.bin").read_bytes()
 boot=(build/"bootloader.bin").read_bytes()
@@ -34,10 +37,18 @@ font=(root/"assets/ui_font.bin").read_bytes()
 font_partition=next(p for p in partitions if p["name"]=="ui_font")
 assert font_partition["offset"]==0x610000 and len(font)<=font_partition["size"]
 assert factory[0x610000:0x610000+len(font)]==font
-legacy=re.search(r'MOONLIGHT_PAIRING_TOKEN\s+"([0-9a-f]{32})"',(root/"include/config_secrets.h").read_text(encoding="utf-8"))
+secret_path=root/"include/config_secrets.h"
+legacy=re.search(r'MOONLIGHT_PAIRING_TOKEN\s+"([0-9a-f]{32})"',secret_path.read_text(encoding="utf-8") if secret_path.exists() else "")
 if legacy:
     assert legacy.group(1).encode() not in app, "Old compiled pairing token must not occur in firmware"
-for config in (host/"settings.json",host/"dist/MoonlightS3Host/settings.json"):
+configs=[]
+if args.host_dir:
+    if not args.host_dir.is_dir():
+        parser.error("--host-dir must be an existing host checkout")
+    configs=[args.host_dir/"settings.json",args.host_dir/"dist/MoonlightS3Host/settings.json"]
+for config in configs:
+    if not config.exists():
+        continue
     settings=json.loads(config.read_text(encoding="utf-8"))
     assert "token" not in settings, "Top-level legacy token must be migrated out"
     for identity,record in settings.get("pairings",{}).items():
@@ -51,6 +62,8 @@ for name in ("firmware.bin","firmware.factory.bin","bootloader.bin","partitions.
     manifest["artifacts"][name]={"bytes":len(data),"sha256":hashlib.sha256(data).hexdigest()}
 (build/"artifact-manifest.json").write_text(json.dumps(manifest,indent=2)+"\n")
 print("PASS: ESP32-S3 chip ID, 16 MB DIO headers, partition bounds, combined image contents.")
-print("PASS: no compiled legacy token; host credentials use explicit device identities.")
+print("PASS: legacy token check complete (when a local legacy token is available).")
+if args.host_dir:
+    print("PASS: available local host settings use explicit device identities.")
 print(f"App bytes: {len(app)} / {application['size']}; factory bytes: {len(factory)}")
 print("Manifest:",build/"artifact-manifest.json")

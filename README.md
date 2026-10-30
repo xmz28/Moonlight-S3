@@ -1,7 +1,7 @@
 # Moonlight S3 — ESP32-S3 触屏 JPEG 云桌面
 
-本项目包含 ESP32-S3 接收端；配套 Windows 发送端位于：
-`C:\Users\10145294\Documents\MySoftware\Moonlight_S3_Host`。
+本仓库为 [Moonlight-S3](https://github.com/xmz28/Moonlight-S3) ESP32-S3 接收端；配套 Windows 软件与源码见 [Moonlight-S3-Host](https://github.com/xmz28/Moonlight-S3-Host)。
+两个项目可以放在任意目录，固件构建无需下载电脑端。发布准备见 [双仓库与发布说明](docs/RELEASING.md)。
 
 电脑抓取指定显示器 → 缩放并编码 baseline JPEG 4:2:0 → Wi-Fi TCP →
 ESP32-S3 的 SIMD JPEG 软件解码 → RGB565 屏幕。
@@ -39,7 +39,7 @@ RGB 时序沿用 LVGL-S3 Wi-Fi 档：12 MHz PCLK，水平 48/40/8，垂直 2/40/
    保存后 S3 重启，之后独立联网，无需保持 USB 连接。这一步不会烧录固件。
 3. 电脑通过网线或 Wi-Fi 接入同一局域网。
    电脑软件保持打开即可。S3 首页自动列出电脑，显示“已配对”或“首次串流需要配对”。点击电脑：已配对直接串流；首次则显示 PIN，电脑自动弹窗输入，验证后自动开始。无需先在电脑选择 S3。
-4. 选择显示器，初始用 **400×240 / 25 FPS / 质量60**，点“开始串流”。
+4. 首次使用建议先在电脑设置显示器及 **400×240 / 25 FPS / 质量60**；之后从 S3 点选电脑即可自动开始，电脑“开始串流”作为备用入口。
 5. 在屏幕底部选择 LEFT / RIGHT / SCROLL / KEYBOARD，再在桌面区域操作。
    LEFT/RIGHT 模式按住移动会拖动；SCROLL 模式上下划动发滚轮。
    KEYBOARD 在 Windows 上启动系统屏幕键盘，其启动成功与否取决于系统组件及权限。
@@ -78,18 +78,19 @@ USB配网密码不回显、不写入电脑设置文件；NVS存储未开启Flash
 
 默认流畅优先最多三帧在途；关闭该选项后最多两帧。电脑只有拿到空位才抓取最新屏幕，不累积截图队列。
 TCP 在差网络下仍有重传排队；超时 3 秒断开，不承诺固定低延迟。
-固件网络任务在 core0，解码任务在 core1。两个 256 KiB JPEG 缓冲、两个 RGB 缓冲和小图缓冲均使用 PSRAM。
+固件网络任务在 core0，解码任务在 core1。JPEG 缓冲和三个 RGB 帧缓冲使用 PSRAM，JPEG 分块解码使用内部 SRAM。
 LCD 同步异常时停止复用缓冲并返回错误，需重启排查，避免继续破坏扫描数据。
 
 ## 编译与更新
 
-共用 **C:\pio-sm-s3** 的 platform / packages，不新建独立环境。
-此机器该目录自身的 pio 启动器报 `uv trampoline failed to canonicalize script path`，
-因此使用已存在的全局启动器，项目 `core_dir` 仍指向同一个共享环境：
+安装 PlatformIO 后，在项目根目录编译；可选的 `include/config_secrets.h` 缺失时使用空 Wi-Fi 默认值，之后通过屏幕或 USB 配网：
 
 ```powershell
-& 'C:\Users\10145294\.platformio\penv\Scripts\pio.exe' run -e moonlight_s3
+pio run -e moonlight_s3
+python tools/verify_artifacts.py
 ```
+
+本机继续共用已有环境：忽略的 `platformio.local.ini` 保留 `core_dir = C:/pio-sm-s3`，启动器仍用原有全局 `pio.exe`，无需迁移或新建环境。其他开发者默认使用自己的 PlatformIO 环境；需要复用目录时参考 `platformio.local.example.ini`。`tools/prepare_local.py` 仅生成缺失的固件 Wi-Fi 配置，不访问电脑端目录。
 
 工具链：pioarduino 55.03.311 / Arduino 3.3.11 / ESP-IDF libs 5.5.5。
 项目独立板定义 `boards/moonlight-s3-n16r8.json` 明确锁定 ESP32-S3、16 MB Flash 和 OPI PSRAM。
@@ -102,7 +103,7 @@ LCD 同步异常时停止复用缓冲并返回错误，需重启排查，避免�
 - `.pio\build\moonlight_s3\firmware.factory.bin`：含 bootloader、分区表、应用和字库的完整组合镜像，偏移 0。
 - `.pio\build\moonlight_s3\firmware.elf`：调试符号。
 
-更新设备：`pio run -e moonlight_s3 -t upload --upload-port COM17`（使用上述已有启动器）。正常上传写入应用、分区表及字库，不擦除 NVS。完整 factory 镜像仅用于首次安装；整镜像从偏移0写入会覆盖中间 NVS 区域，已有配网更新请使用正常 upload。
+更新设备：`pio run -e moonlight_s3 -t upload --upload-port <串口>`。正常上传写入应用、分区表及字库，不擦除 NVS。完整 factory 镜像仅用于首次安装；整镜像从偏移0写入会覆盖中间 NVS 区域，已有配网更新请使用正常 upload。
 
 ## 工程来源和验证范围
 
