@@ -11,6 +11,7 @@
 #include "lan.h"
 #include "pairing.h"
 #include "storage.h"
+#include "performance.h"
 
 namespace lan {
 namespace {
@@ -55,6 +56,10 @@ bool decodeHex(const char *text,char *out,size_t capacity) {
   return true;
 }
 void command() {
+  if(!strcmp(line,"MS3PERF1")){
+    if(playId||configuring||pairing::enabled())Serial.println("MS3PERF1 BUSY REBOOT_REQUIRED");
+    else performance::benchmark();return;
+  }
   if (!strcmp(line,"MS3STATUS1")) {
     Serial.printf("MS3STATUS1 %s %s %s\n",id,WiFi.localIP().toString().c_str(),
       online?"CONNECTED":credentials.ssid[0]?"WAITING":"UNCONFIGURED");

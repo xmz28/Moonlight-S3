@@ -4,6 +4,7 @@
 #include <esp_lcd_panel_rgb.h>
 #include "config.h"
 #include "display.h"
+#include "performance.h"
 #include "esp_jpeg_dec.h"
 
 namespace display {
@@ -112,6 +113,7 @@ bool prepare(const uint8_t *jpeg,size_t size,Frame &frame) {
   const int back=frame.index;
   io.outbuf=reinterpret_cast<uint8_t *>(block);
   frame.decodeUs=micros()-start;
+  const bool overlay=performance::beginFrame();
   int outputY=0;
   for (int part=0;part<blocks;++part) {
     const uint32_t decoding=micros();
@@ -128,15 +130,19 @@ bool prepare(const uint8_t *jpeg,size_t size,Frame &frame) {
           const uint32_t pixel=source[x];
           expandedRow[x]=pixel|(pixel<<16);
         }
+        if(overlay)performance::paintRow(reinterpret_cast<uint16_t *>(expandedRow),(outputY+y)*2);
         memcpy(row,expandedRow,sizeof(expandedRow));
+        if(overlay)performance::paintRow(reinterpret_cast<uint16_t *>(expandedRow),(outputY+y)*2+1);
         memcpy(row+800,expandedRow,sizeof(expandedRow));
       }
     } else {
+      if(overlay)for(int y=0;y<rows;++y)performance::paintRow(block+y*800,outputY+y);
       memcpy(fb[back]+outputY*800,block,io.out_size);
     }
     outputY+=rows;
   }
   if (outputY!=info.height) return false;
+  if(overlay)performance::endFrame();
   frame.preparedUs=micros()-start;
   return true;
 }

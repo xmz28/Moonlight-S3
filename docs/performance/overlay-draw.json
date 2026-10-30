@@ -1,0 +1,8 @@
+{
+  "first_us": 1073,
+  "cached_avg_us": 888,
+  "cached_max_us": 1092,
+  "extra_psram_bytes": 0,
+  "method": "ESP32-S3 boot-idle real overlay composition into internal SRAM rows; original JPEG framebuffer copy unchanged; LCD scanning active",
+  "fps_comparison_completed": false
+}

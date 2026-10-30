@@ -9,6 +9,8 @@ GT911 触摸通过同一连接回传，由电脑调用 Windows SendInput。
 
 这是自定义 JPEG 串流协议，不兼容 Moonlight/Sunshine 的 GameStream 协议。
 支持 Windows 桌面、单点直接触摸/触摸板、长按右键、滚轮、本地文字键盘及会话菜单，详见 [连接与操作说明](docs/SESSION_UX.md)。
+
+底栏六键已统一尺寸，电脑设置页统一为两列四行。可选 S3 本地性能浮窗显示 FPS、解码/显示耗时、ACK 时间、JPEG 接收 Mbps 和 Wi-Fi 信号；可在 MENU 即时开关。实现与实机开销边界见 [性能浮窗](docs/PERFORMANCE_OVERLAY.md)。
 没有音频、剪贴板、文件传输、原生多点 Windows 触摸、互联网中继和 TLS。
 优先用于本地 Wi-Fi；远程使用需要自行提供可路由的 VPN，不能直接连接公网云电脑服务商协议。
 

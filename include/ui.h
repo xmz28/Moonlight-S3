@@ -8,7 +8,7 @@ void streamEnded();
 void connecting(bool accepted);
 void poll(bool allowed);
 void touch(const touch::State &state);
-enum class Action { None, Resume, Disconnect, Reconnect, Text, Key, Mode };
+enum class Action { None, Resume, Disconnect, Reconnect, Text, Key, Mode, Stats };
 void openMenu();
 void openText();
 bool localMenu();

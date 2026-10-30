@@ -10,6 +10,7 @@
 #include "ui.h"
 #include "pairing.h"
 #include "storage.h"
+#include "performance.h"
 
 #if !CONFIG_IDF_TARGET_ESP32S3
 #error This firmware requires ESP32-S3
@@ -30,6 +31,8 @@ static size_t have, received;
 static int receiving=-1;
 static bool authenticated, touchArmed;
 static bool paused=false,menuContact=false;
+static bool pauseReady=false;
+static uint32_t pauseSerial=0;
 static bool physicalDown=false;
 static uint32_t authRequest=0;
 static char authHost[33]={};
@@ -48,7 +51,7 @@ static void disconnect() {
   if (authenticated) {networkNotice=true;lan::streamEnded();ui::streamEnded();}
   client.stop(); authenticated=false; touchArmed=false; have=received=0;
   handshake=Handshake::Hello;pairing::abort();
-  paused=false;lan::setLocalPause(false);
+  paused=pauseReady=false;lan::setLocalPause(false);
   if (receiving>=0) { xQueueSend(freeSlots,&receiving,0); receiving=-1; }
 }
 static bool sendEvent(const char *tag,uint32_t a,uint32_t b,uint32_t c) {
@@ -108,6 +111,7 @@ void setup() {
     xQueueSend(freeSlots,&i,0);
   }
   if(!storage::begin())fail("Moonlight configuration migration failed; original NVS preserved");
+  if(!performance::begin())Serial.println("Performance overlay unavailable: PSRAM allocation failed");
   lan::begin();
   pairing::begin();
   ui::poll(true);
@@ -124,6 +128,7 @@ void loop() {
   }
   Result r;
   while (xQueueReceive(results,&r,0)==pdTRUE) {
+    if(authenticated&&r.generation==generation)performance::displayed(r.decodeUs,r.totalUs,r.ok);
     if (r.ok) ++shown; else ++errors;
     if(r.ok&&authenticated&&r.generation==generation)lan::frameShown();
     if (authenticated && r.generation==generation)
@@ -133,7 +138,8 @@ void loop() {
   if (networkNotice && !authenticated && uxQueueMessagesWaiting(freeSlots)==2 && display::idle()) {
     ui::invalidate(); networkNotice=false;
   }
-  ui::poll((!authenticated||paused) && uxQueueMessagesWaiting(freeSlots)==2 && display::idle());
+  const bool uiAllowed=(!authenticated||(paused&&pauseReady))&&uxQueueMessagesWaiting(freeSlots)==2&&display::idle()&&uxQueueMessagesWaiting(results)==0;
+  ui::poll(uiAllowed);
   if (client && ui::active()&&!paused) disconnect();
   if (!ui::active() && lan::connected() && (!client || !client.connected())) {
     disconnect();
@@ -172,13 +178,15 @@ void loop() {
         uint8_t reply[68];
         if (!lan::authorizeRequest(authHost,authRequest)||!pairing::authenticate(header,reply) || client.write(reply,sizeof(reply))!=sizeof(reply)) disconnect();
         else {
-          authenticated=true;have=0;touchArmed=false;lan::streamStarted();
+          authenticated=true;have=0;touchArmed=false;lan::streamStarted();performance::reset();performance::enable((lan::options()&2)!=0);
           sendEvent("RDY1",800,480,config::MaxJpeg);
         }
       }
     } else if (authenticated && receiving<0 && have==16) {
       const uint32_t length=be32(header+8);
-      if(!memcmp(header,"NOP3",4)){have=0;}
+      if(!memcmp(header,"PAK3",4)){if(paused&&be32(header+4)==pauseSerial)pauseReady=true;have=0;}
+      else if(!memcmp(header,"STA3",4)){performance::enable(be32(header+8)==1);performance::host(be32(header+4),WiFi.RSSI());have=0;}
+      else if(!memcmp(header,"NOP3",4)){have=0;}
       else if (memcmp(header,"JPG1",4) || length<4 || length>config::MaxJpeg) disconnect();
       else if (xQueueReceive(freeSlots,&receiving,0)==pdTRUE) {
         Slot &s=slots[receiving];
@@ -189,7 +197,7 @@ void loop() {
     if (receiving>=0 && client.available()) {
       Slot &s=slots[receiving];
       const int n=client.read(s.data+received,min<size_t>(4096,min<size_t>(s.length-received,client.available())));
-      if (n>0) { received+=n; lastRx=millis(); }
+      if (n>0) { received+=n;performance::received(n); lastRx=millis(); }
       if (received==s.length) {
         if(paused){sendEvent("DRP3",s.sequence,0,0);if(receiving>=0)xQueueSend(freeSlots,&receiving,0);}
         else xQueueSend(readySlots,&receiving,0);
@@ -201,13 +209,13 @@ void loop() {
     lastTouch=millis(); const auto t=touch::poll();
     const bool firstContact=t.down&&!physicalDown;physicalDown=t.down;
     if(!t.down)ui::touch(t); // Always rearm on lift, including while a UI redraw is busy.
-    else if (((!authenticated&&!client)||paused) && uxQueueMessagesWaiting(freeSlots)==2 && display::idle()) ui::touch(t);
+    else if (((!authenticated&&!client)||(paused&&pauseReady)) && uxQueueMessagesWaiting(freeSlots)==2 && display::idle()) ui::touch(t);
     if(!t.down)menuContact=false;
     const bool toolbar=(lan::options()&4)!=0;
-    if(authenticated&&!paused&&firstContact&&!menuContact&&t.y>=448&&((t.x>=720)||(toolbar&&t.x>=480&&t.x<640))){
-      menuContact=true;paused=true;lan::setLocalPause(true);touchArmed=false;
-      if(t.x<640)ui::openText();else ui::openMenu();sendEvent("PAU3",1,0,0);
-    } else if(authenticated&&!paused&&firstContact&&toolbar&&t.y>=448&&t.x>=640&&t.x<720){
+    if(authenticated&&!paused&&firstContact&&!menuContact&&t.y>=448&&((t.x>=666)||(toolbar&&t.x>=400&&t.x<533))){
+      menuContact=true;paused=true;pauseReady=false;++pauseSerial;lan::setLocalPause(true);touchArmed=false;
+      if(t.x<533)ui::openText();else ui::openMenu();sendEvent("PAU3",1,pauseSerial,0);
+    } else if(authenticated&&!paused&&firstContact&&toolbar&&t.y>=448&&t.x>=533&&t.x<666){
       menuContact=true;sendEvent("BYE3",8,0,0);lan::cancelPlay();disconnect();ui::streamEnded();
     }
     if (!t.down) touchArmed=true;
@@ -221,11 +229,12 @@ void loop() {
     }
   }
   const auto action=ui::takeAction();
-  if(action==ui::Action::Resume&&authenticated){ui::invalidate();paused=false;lan::setLocalPause(false);touchArmed=false;sendEvent("PAU3",0,0,0);}
+  if(action==ui::Action::Resume&&authenticated){ui::invalidate();paused=pauseReady=false;lan::setLocalPause(false);touchArmed=false;performance::reset();sendEvent("PAU3",0,pauseSerial,0);}
   else if(action==ui::Action::Disconnect){if(authenticated)sendEvent("BYE3",8,0,0);lan::cancelPlay();disconnect();ui::streamEnded();}
   else if(action==ui::Action::Reconnect){if(authenticated)sendEvent("BYE3",0,0,0);lan::cancelPlay();disconnect();ui::connecting(lan::requestPlay(lan::selectedId()));}
   else if(action==ui::Action::Key&&authenticated&&paused)sendEvent("KEY3",ui::actionValue(),0,0);
   else if(action==ui::Action::Mode&&authenticated&&paused)sendEvent("MOD3",ui::actionValue(),0,0);
+  else if(action==ui::Action::Stats&&authenticated&&paused){performance::enable((lan::options()&2)!=0);sendEvent("OVR3",(lan::options()&2)?1:0,0,0);}
   else if(action==ui::Action::Text&&authenticated&&paused){const char *value=ui::textValue();const size_t length=strlen(value);if(length&&length<=128&&sendEvent("TXT3",length,0,0))if(client.write((const uint8_t *)value,length)!=length)disconnect();}
   if (millis()-lastPrint>=2000) {
     Serial.printf("display=%.1f fps errors=%lu internal=%u psram=%u\n",
