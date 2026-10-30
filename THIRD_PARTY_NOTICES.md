@@ -4,9 +4,9 @@
   See `lib/esp_new_jpeg/LICENSE` and `PROVENANCE.md`.
 - Arduino-ESP32 and ESP-IDF are supplied by the existing PlatformIO environment;
   their source and licenses remain in `C:/pio-sm-s3/packages`.
-- `include/font.h` rasterizes Pillow's bundled Aileron regular default font.
-  Pillow's full license notice is preserved in `licenses/Pillow-LICENSE.txt`.
-  The font designer labels Aileron "No Rights Reserved":
-  https://dotcolon.net/fonts/aileron/
+- `assets/ui_font.bin`: Moonlight UI bitmap derivative of Noto Sans CJK SC Regular.
+  The source font copyright and provenance are in `assets/README.md`.
+  SIL Open Font License 1.1 is preserved in `licenses/NotoSansCJK-OFL.txt`.
+  Bitmap conversion uses the existing Pillow installation; no Windows font files are redistributed.
 
 No third-party project is represented as having certified this hardware build.

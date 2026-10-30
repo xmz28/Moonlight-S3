@@ -3,7 +3,8 @@
 #include <stdint.h>
 namespace display {
 bool begin();
-void splash(const char *network, const char *ip);
+uint16_t *beginUi(int &index);
+void endUi(int index);
 struct Frame {
   int index=-1;
   uint32_t started=0, decodeUs=0, preparedUs=0;

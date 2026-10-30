@@ -5,7 +5,6 @@
 #include "config.h"
 #include "display.h"
 #include "esp_jpeg_dec.h"
-#include "font.h"
 
 namespace display {
 static esp_lcd_panel_handle_t panel;
@@ -87,29 +86,11 @@ static bool flip(int back) {
   xQueueSend(freeBuffers,&previous,0);
   return true;
 }
-static void text(uint16_t *target,int x,int y,const char *str,uint16_t color,int scale=2) {
-  for (;*str;++str,x+=8*scale) {
-    unsigned ch=static_cast<uint8_t>(*str);
-    if (ch<32 || ch>126) ch='?';
-    for (int row=0;row<16;++row) for (int col=0;col<8;++col)
-      if (Font[ch-32][row] & (1<<(7-col)))
-        for (int dy=0;dy<scale;++dy) for(int dx=0;dx<scale;++dx) {
-          const int xx=x+col*scale+dx, yy=y+row*scale+dy;
-          if (xx>=0 && xx<800 && yy>=0 && yy<480) target[yy*800+xx]=color;
-        }
-  }
+uint16_t *beginUi(int &index) {
+  if (!healthy || !idle() || xQueueReceive(freeBuffers,&index,0)!=pdTRUE) return nullptr;
+  return fb[index];
 }
-void splash(const char *network,const char *ip) {
-  int back;
-  if (!healthy || xQueueReceive(freeBuffers,&back,pdMS_TO_TICKS(200))!=pdTRUE) return;
-  memset(fb[back],0,800*480*2);
-  text(fb[back],60,50,"MOONLIGHT S3",0x07ff,3);
-  text(fb[back],60,140,network,0xffff);
-  text(fb[back],60,200,ip,0xffff);
-  text(fb[back],60,280,"Start Moonlight S3 Host on PC",0x07e0);
-  text(fb[back],60,340,"JPEG desktop + touch control",0xffff);
-  if (!flip(back)) healthy=false;
-}
+void endUi(int index) { if (!flip(index)) healthy=false; }
 bool idle() { return uxQueueMessagesWaiting(freeBuffers)==2; }
 void discard(const Frame &frame) {
   if (frame.index>=0) xQueueSend(freeBuffers,&frame.index,0);

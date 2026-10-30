@@ -30,6 +30,10 @@ assert application["offset"]==0x10000 and len(app)<=application["size"]
 assert factory[:len(boot)]==boot
 assert factory[0x8000:0x8000+len(parts)]==parts
 assert factory[0x10000:0x10000+len(app)]==app
+font=(root/"assets/ui_font.bin").read_bytes()
+font_partition=next(p for p in partitions if p["name"]=="ui_font")
+assert font_partition["offset"]==0x610000 and len(font)<=font_partition["size"]
+assert factory[0x610000:0x610000+len(font)]==font
 token=re.search(r'"([0-9a-f]{32})"',(root/"include/config_secrets.h").read_text()).group(1)
 for config in (host/"settings.json",host/"dist/MoonlightS3Host/settings.json"):
     assert json.loads(config.read_text(encoding="utf-8"))["token"]==token

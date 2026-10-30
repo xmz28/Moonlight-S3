@@ -65,3 +65,8 @@ python tools/benchmark_stream.py --serial COM17 --seconds 30 --low-latency --out
 原始记录位于本目录的performance/，最终记录为optimized-smooth.json。
 
 实现参考：[DXcam官方项目](https://github.com/ra1nty/DXcam)、[乐鑫分块解码示例](https://github.com/espressif/esp-adf-libs/blob/master/esp_new_jpeg/test_app/main/test_decoder.c)、[乐鑫RGB驱动](https://github.com/espressif/esp-idf/blob/v5.5.5/components/esp_lcd/rgb/esp_lcd_panel_rgb.c)。
+
+
+## 2026-10-30：中文界面、Wi-Fi 设置及屏上启停
+
+已完成编译烧录。用户确认中文、Wi-Fi扫描连接、开始和返回正常；最终帧率400×240为21.178 FPS、800×480为9.995 FPS，两档零错误。资源方案、各轮对照及波动限制见 [WIFI_UI.md](WIFI_UI.md)。本轮功能改动尚未提交。

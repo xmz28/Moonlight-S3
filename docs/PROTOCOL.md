@@ -57,7 +57,7 @@ The token is transmitted in clear text. This is local pairing, not TLS or mutual
 
 CRC test vector: ASCII `123456789` gives `0xcbf43926`.
 JPEG is baseline, 4:2:0, either 800×480 or 400×240; decoder validates dimensions and output length.
-At most two unacknowledged frames. Host captures a new frame only after a credit is available.
+At most three unacknowledged frames in smooth mode, or two otherwise. Host captures a new frame only after a credit is available.
 Both success and error acknowledge/retire the named sequence; current host stops on ERR1.
 Partial header/body timeout is 3 seconds of no receive progress. The host additionally enforces a 3-second ACK timeout.
 
@@ -81,7 +81,7 @@ Host releases on stop, exception or disconnect. No screen-to-host executable com
 ## Rendering and touch
 
 Logical screen coordinates always remain 800×480 even when JPEG uses 400×240.
-With toolbar enabled, y=448..479 is reserved for four 200px buttons.
+With toolbar enabled, y=448..479 is reserved for five 160px buttons: LEFT, RIGHT, SCROLL, KEYBOARD, BACK.
 Desktop is fitted with preserved aspect ratio in the remaining rectangle.
 Black-bar touches do not initiate a press; an existing drag leaving the image clamps at the image boundary.
 Coordinates map into the selected Windows monitor's physical pixel rectangle, including negative origins.
@@ -93,3 +93,14 @@ queued/prepared buffer, and decoder buffer. Only the LCD-complete callback retir
 the previous scanned buffer. Decoder and presenter tasks overlap; ACK1 still
 follows the actual completed LCD switch, and the host permits three frames
 in flight in smooth mode, or two when smooth mode is disabled. Network/idle notices require both JPEG and RGB queues to be idle.
+
+
+## Receiver-screen start request (MS3CTL1)
+
+While idle, the PC GUI polls only its selected receiver over unicast UDP47990 once per second. No new PC listening port is introduced. Streaming disables this polling.
+
+Query: `MS3CTL1 <32-lowercase-hex-nonce> <64-lowercase-hex-HMAC>` (105 ASCII bytes).
+Reply: `MS3CTL1 <nonce> <12-hex-device-id> <8-hex-action-id> <64-hex-HMAC>` (127 bytes).
+HMAC-SHA256 uses the shared 32-character ASCII pairing token as key, covering all bytes before the final separating space and signature. The pairing token itself is not sent in these UDP packets. The PC checks nonce, signature, source IP/port and selected device identity when known.
+
+Touching Start creates a random nonzero action ID valid for15 seconds; zero means no pending request. The PC deduplicates actions and starts the normal TCP session. Authentication clears the request; entering Wi-Fi settings cancels it. BACK is interpreted by the host toolbar controller and ends the TCP session after releasing input. BACK remains enabled in view-only mode. TCP pairing/video are still unencrypted.

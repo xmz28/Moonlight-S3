@@ -4,12 +4,23 @@
 #include <Preferences.h>
 #include <ESPmDNS.h>
 #include <esp_wifi.h>
+#include <esp_random.h>
+#include <mbedtls/md.h>
+#include <atomic>
 #include "config.h"
 #include "lan.h"
 
 namespace lan {
 namespace {
 struct Credentials { char ssid[33]; char password[65]; } credentials={};
+Credentials candidate={};
+bool configuring=false;
+JoinState joining=JoinState::Idle;
+uint32_t joinStarted=0;
+std::atomic<uint32_t> associations{0};
+uint32_t joinAssociation=0;
+uint32_t playId=0,playStarted=0;
+PlayState playing=PlayState::Idle;
 NetworkUDP discovery;
 char id[13], hostname[32], line[224];
 size_t lineSize=0;
@@ -90,10 +101,39 @@ void advertise() {
     MDNS.addServiceTxt("moonlight-s3","tcp","version","1");
   }
 }
+void signature(const char *data,size_t length,char *out) {
+  uint8_t digest[32]={};
+  const auto *algorithm=mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+  if (!algorithm || mbedtls_md_hmac(algorithm,reinterpret_cast<const uint8_t *>(config::Token),32,
+      reinterpret_cast<const uint8_t *>(data),length,digest)) { out[0]=0;return; }
+  constexpr char digits[]="0123456789abcdef";
+  for (int i=0;i<32;++i) { out[i*2]=digits[digest[i]>>4];out[i*2+1]=digits[digest[i]&15]; }
+  out[64]=0;
+}
+void controlQuery(const char *request) {
+  if (request[40]!=' ') return;
+  for (int i=8;i<40;++i) if (hex(request[i])<0) return;
+  char expected[65];signature(request,40,expected);
+  if (!expected[0]) return;
+  uint8_t difference=0;
+  for (int i=0;i<64;++i) difference|=expected[i]^request[41+i];
+  if (difference) return;
+  char response[160],nonce[33];memcpy(nonce,request+8,32);nonce[32]=0;
+  const int length=snprintf(response,sizeof(response),"MS3CTL1 %s %s %08lx",nonce,id,playId);
+  char mac[65];signature(response,length,mac);
+  if (!mac[0]) return;
+  snprintf(response+length,sizeof(response)-length," %s",mac);
+  if (discovery.beginPacket(discovery.remoteIP(),discovery.remotePort())) {
+    discovery.write(reinterpret_cast<const uint8_t *>(response),strlen(response));discovery.endPacket();
+  }
+}
 void discoverPoll() {
   const int size=discovery.parsePacket();
   if (!size) return;
-  char request[42]={};
+  char request[128]={};
+  if (size==105 && discovery.read(request,105)==105 && !strncmp(request,"MS3CTL1 ",8)) {
+    controlQuery(request);return;
+  }
   if (size!=41 || discovery.read(request,41)!=41 || strncmp(request,"MS3DISC1 ",9)) {
     discovery.clear(); return;
   }
@@ -109,6 +149,9 @@ void discoverPoll() {
 }
 }
 void begin() {
+  WiFi.onEvent([](arduino_event_id_t event,arduino_event_info_t) {
+    if (event==ARDUINO_EVENT_WIFI_STA_CONNECTED) associations.fetch_add(1,std::memory_order_relaxed);
+  });
   WiFi.mode(WIFI_STA); // Never creates a SoftAP, including provisioning/recovery.
   const String mac=WiFi.macAddress();
   String compact=mac; compact.replace(":",""); compact.toLowerCase();
@@ -132,6 +175,47 @@ void begin() {
 }
 bool connected() { return online; }
 const char *name() { return hostname; }
+String ssid() { return connected()?WiFi.SSID():String(credentials.ssid); }
+JoinState joinState() { return joining; }
+void setConfiguring(bool enabled) {
+  configuring=enabled;
+  WiFi.setAutoReconnect(!enabled);
+  if (enabled) {
+    playId=0;playing=PlayState::Idle;
+    joining=JoinState::Idle;
+    if (WiFi.status()!=WL_CONNECTED) WiFi.disconnect(false,false);
+  } else {
+    const bool restore=joining==JoinState::Connecting || joining==JoinState::Failed || WiFi.status()!=WL_CONNECTED;
+    joining=JoinState::Idle;
+    memset(&candidate,0,sizeof(candidate));
+    if (restore) {
+      WiFi.disconnect(false,false);
+      if (credentials.ssid[0]) WiFi.begin(credentials.ssid,credentials.password);
+      lastRetry=millis();
+    }
+  }
+}
+PlayState playState() { return playing; }
+bool requestPlay() {
+  if (!online || configuring) return false;
+  do { playId=esp_random(); } while (!playId);
+  playStarted=millis();playing=PlayState::Waiting;
+  return true;
+}
+void streamStarted() { playId=0;playing=PlayState::Idle; }
+bool join(const char *ssid,const char *password) {
+  const size_t a=strlen(ssid),b=strlen(password);
+  if (!configuring || !a || a>32 || b>64 || (b && b<8)) return false;
+  if (b==64) for (size_t i=0;i<b;++i) if (hex(password[i])<0) return false;
+  memset(&candidate,0,sizeof(candidate));
+  strlcpy(candidate.ssid,ssid,sizeof(candidate.ssid));
+  strlcpy(candidate.password,password,sizeof(candidate.password));
+  joining=JoinState::Connecting; joinStarted=millis();
+  joinAssociation=associations.load(std::memory_order_relaxed);
+  WiFi.disconnect(false,false);
+  WiFi.begin(candidate.ssid,candidate.password);
+  return true;
+}
 String status() {
   if (online) return address.toString();
   wifi_ap_record_t ap={};
@@ -140,16 +224,35 @@ String status() {
 }
 bool poll() {
   serialPoll();
+  if (playId && millis()-playStarted>15000) { playId=0;playing=PlayState::TimedOut; }
   const bool now=WiFi.status()==WL_CONNECTED && uint32_t(WiFi.localIP())!=0;
   const IPAddress ip=now?WiFi.localIP():IPAddress();
   const bool changed=now!=online || ip!=address;
+  if (joining==JoinState::Connecting) {
+    if (now && associations.load(std::memory_order_relaxed)!=joinAssociation && WiFi.SSID()==candidate.ssid) {
+      Preferences prefs;
+      bool saved=false;
+      if (prefs.begin("moonlight",false)) {
+        saved=prefs.putBytes("wifi",&candidate,sizeof(candidate))==sizeof(candidate);
+        prefs.end();
+      }
+      if (saved) credentials=candidate;
+      joining=saved?JoinState::Saved:JoinState::Failed;
+      memset(&candidate,0,sizeof(candidate));
+      Serial.println(saved?"WiFi setup: connected and saved":"WiFi setup: NVS save failed");
+    } else if (millis()-joinStarted>20000) {
+      WiFi.disconnect(false,false); joining=JoinState::Failed;
+      memset(&candidate,0,sizeof(candidate));
+      Serial.println("WiFi setup: connection timeout; saved credentials preserved");
+    }
+  }
   if (changed) {
     discovery.stop(); if (mdns) MDNS.end(); mdns=false;
     online=now; address=ip;
     if (online) advertise();
     Serial.printf("LAN: %s %s\n",hostname,status().c_str());
   }
-  if (!online && credentials.ssid[0] && millis()-lastRetry>=15000) {
+  if (!online && !configuring && credentials.ssid[0] && millis()-lastRetry>=15000) {
     lastRetry=millis(); WiFi.reconnect();
   }
   if (online) discoverPoll();

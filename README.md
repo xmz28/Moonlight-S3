@@ -82,7 +82,7 @@ TCP 在差网络下仍有重传排队；超时 3 秒断开，不承诺固定低�
 固件网络任务在 core0，解码任务在 core1。两个 256 KiB JPEG 缓冲、两个 RGB 缓冲和小图缓冲均使用 PSRAM。
 LCD 同步异常时停止复用缓冲并返回错误，需重启排查，避免继续破坏扫描数据。
 
-## 编译（只编译，不烧录）
+## 编译与更新
 
 共用 **C:\pio-sm-s3** 的 platform / packages，不新建独立环境。
 此机器该目录自身的 pio 启动器报 `uv trampoline failed to canonicalize script path`，
@@ -95,15 +95,15 @@ LCD 同步异常时停止复用缓冲并返回错误，需重启排查，避免�
 工具链：pioarduino 55.03.311 / Arduino 3.3.11 / ESP-IDF libs 5.5.5。
 项目独立板定义 `boards/moonlight-s3-n16r8.json` 明确锁定 ESP32-S3、16 MB Flash 和 OPI PSRAM。
 镜像 Flash header 沿用参考工程的 DIO，内部 memory_type=qio_opi。
-分区使用单 factory 应用；首版未提供 OTA，不要套用双 OTA 分区升级方式。
+分区使用单 factory 应用和独立 ui_font 字库数据分区；未提供 OTA。
 
 输出：
 
 - `.pio\build\moonlight_s3\firmware.bin`：应用程序，偏移 0x10000。
-- `.pio\build\moonlight_s3\firmware.factory.bin`：含 bootloader、分区表的完整组合镜像，偏移 0。
+- `.pio\build\moonlight_s3\firmware.factory.bin`：含 bootloader、分区表、应用和字库的完整组合镜像，偏移 0。
 - `.pio\build\moonlight_s3\firmware.elf`：调试符号。
 
-**本轮只生成镜像，不执行 upload、擦除或访问串口设备。**
+更新设备：`pio run -e moonlight_s3 -t upload --upload-port COM17`（使用上述已有启动器）。正常上传写入应用、分区表及字库，不擦除 NVS。完整 factory 镜像仅用于首次安装；整镜像从偏移0写入会覆盖中间 NVS 区域，已有配网更新请使用正常 upload。
 
 ## 工程来源和验证范围
 
@@ -113,7 +113,7 @@ LCD 同步异常时停止复用缓冲并返回错误，需重启排查，避免�
 - 新协议详见 `docs/PROTOCOL.md`。
 - 主机测试涵盖 wire layout、CRC、JPEG 格式、TCP 拆包、两/三帧流控、坐标映射、工具栏和失联松键。
   使用 loopback 模拟接收端和虚拟鼠标，不代表真实 S3 解码或实际 Windows 点击已经验证。
-- 未烧录，未验证屏幕颜色/撕裂、触摸轴向、Wi-Fi 吞吐、实际 FPS 或端到端延迟。
+- 已烧录 ESP32-S3 实机；用户确认画面、触摸、中文、Wi-Fi 扫描连接以及开始/返回操作正常。帧率受网络与桌面内容影响；端到端触摸延迟和长期稳定性尚未完整测量。
 
 参考：
 - https://components.espressif.com/components/espressif/esp_new_jpeg/versions/1.0.2/readme
@@ -121,3 +121,14 @@ LCD 同步异常时停止复用缓冲并返回错误，需重启排查，避免�
 - https://learn.microsoft.com/en-us/windows/win32/api/winuser/ns-winuser-mouseinput
 - https://docs.espressif.com/projects/arduino-esp32/en/latest/api/wifi.html
 - https://pyserial.readthedocs.io/en/latest/pyserial_api.html
+
+
+## 屏上首页与 Wi-Fi 设置（2026-10-30）
+
+首页显示中文状态、当前网络和 IP。电脑配套软件保持打开并选好接收端、配对码及画面参数，然后在 S3 上点“开始串流”；约一秒内由电脑发起连接。找不到软件时请求15秒后超时，可重试。也可直接在电脑点开始。
+
+串流底栏依次为 LEFT、RIGHT、SCROLL、KEYBOARD、BACK；BACK 停止当前串流并返回 S3 首页。仅投屏模式下 BACK 仍可用；隐藏工具栏时从电脑停止。
+
+首页右上角“Wi-Fi 设置”支持扫描、翻页、选择网络、输入密码和连接。连接成功并取得地址后保存到 NVS，失败不覆盖旧凭据；退出设置可恢复旧网络。支持2.4GHz普通个人/开放网络，暂不支持企业认证。键盘输入 ASCII；中文网络名可从扫描列表选择。
+
+扫描仅在设置页手动触发，串流期间不扫描、不绘制设置页。字体按字形从独立 Flash 分区读取，复用已有 RGB 帧缓冲，不把整套中文字体放入 PSRAM。详细验证及性能限制见 [WIFI_UI.md](docs/WIFI_UI.md)。

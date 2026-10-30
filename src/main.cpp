@@ -7,6 +7,7 @@
 #include "display.h"
 #include "touch.h"
 #include "lan.h"
+#include "ui.h"
 
 #if !CONFIG_IDF_TARGET_ESP32S3
 #error This firmware requires ESP32-S3
@@ -36,6 +37,7 @@ static void put32(uint8_t *p,uint32_t v) {
   p[0]=v>>24; p[1]=v>>16; p[2]=v>>8; p[3]=v;
 }
 static void disconnect() {
+  if (authenticated) networkNotice=true;
   client.stop(); authenticated=false; touchArmed=false; have=received=0;
   if (receiving>=0) { xQueueSend(freeSlots,&receiving,0); receiving=-1; }
 }
@@ -84,6 +86,7 @@ void setup() {
   Serial.printf("Moonlight S3: %s, PSRAM %u bytes\n",ESP.getChipModel(),ESP.getPsramSize());
   if (!psramFound() || ESP.getPsramSize()<4*1024*1024) fail("8 MB OPI PSRAM board expected");
   if (!display::begin()) fail("LCD/JPEG initialization failed");
+  if (!ui::begin()) fail("UI font partition missing or invalid; upload full firmware with font");
   touch::begin();
   freeSlots=xQueueCreate(2,sizeof(int)); readySlots=xQueueCreate(2,sizeof(int));
   results=xQueueCreate(4,sizeof(Result));
@@ -95,7 +98,7 @@ void setup() {
     xQueueSend(freeSlots,&i,0);
   }
   lan::begin();
-  display::splash(lan::name(),lan::status().c_str());
+  ui::poll(true);
   if (xTaskCreatePinnedToCore(renderTask,"lcd_present",4096,nullptr,3,nullptr,0)!=pdPASS)
     fail("Presenter task allocation failed");
   if (xTaskCreatePinnedToCore(decodeTask,"jpeg_decode",8192,nullptr,3,nullptr,1)!=pdPASS)
@@ -114,9 +117,11 @@ void loop() {
   }
   // Only update the LCD when all compressed slots are free: decoder cannot race splash.
   if (networkNotice && !authenticated && uxQueueMessagesWaiting(freeSlots)==2 && display::idle()) {
-    display::splash(lan::name(),lan::status().c_str()); networkNotice=false;
+    ui::invalidate(); networkNotice=false;
   }
-  if (lan::connected() && (!client || !client.connected())) {
+  ui::poll(!authenticated && uxQueueMessagesWaiting(freeSlots)==2 && display::idle());
+  if (client && ui::active()) disconnect();
+  if (!ui::active() && lan::connected() && (!client || !client.connected())) {
     disconnect();
     client=server.accept();
     if (client) {
@@ -139,6 +144,7 @@ void loop() {
       if (memcmp(header,"AUT1",4) || difference) disconnect();
       else {
         authenticated=true; have=0; touchArmed=false;
+        lan::streamStarted();
         sendEvent("RDY1",800,480,config::MaxJpeg);
       }
     } else if (authenticated && receiving<0 && have==16) {
@@ -161,6 +167,7 @@ void loop() {
   }
   if (millis()-lastTouch>=10) {
     lastTouch=millis(); const auto t=touch::poll();
+    if (!authenticated && !client && uxQueueMessagesWaiting(freeSlots)==2 && display::idle()) ui::touch(t);
     if (!t.down) touchArmed=true;
     const bool down=touchArmed && t.down;
     const bool changed=t.x!=touchX || t.y!=touchY || down!=touchDown;
