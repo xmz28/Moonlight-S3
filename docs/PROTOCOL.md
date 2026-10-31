@@ -1,5 +1,9 @@
 # Moonlight S3 wire protocol v3 session control / v2 PIN authorization / v1 JPEG framing
 
+## 中文版本说明
+
+当前配套版本使用 v3 会话控制、v2 PIN 授权和 v1 JPEG 帧格式，必须同步更新电脑端与固件；旧版 JPEG 帧格式相同不代表会话兼容。菜单暂停要求 PAU3/PAK3 确认，性能浮窗使用 STA3/OVR3；使用入口及配置迁移见 [SESSION_UX.md](SESSION_UX.md)，升级分区要求见 [RELEASING.md](RELEASING.md)。电脑端当前通过完整设备身份自动发现和连接，手填 IP 与 USB 配网按钮已从主界面移除，底层协议和诊断能力保留。
+
 TCP 47989, one PC per receiver. All uint32 fields are big endian.
 Messages may be fragmented/coalesced arbitrarily by TCP; parsers accumulate exact lengths.
 Session state belongs to one TCP connection; reconnect resets framing and authentication.
@@ -15,7 +19,7 @@ Device ID is the full12-digit lowercase STA MAC without separators. Hostname is
 Reply contains no password/token. Host validates nonce, ID, name and port, deduplicates
 by ID+address+port, and requires the user to choose a result. Discovery is not authentication.
 Receiver also advertises `_moonlight-s3._tcp` over mDNS with TXT id/version.
-Manual IP/hostname remains supported when broadcast discovery cannot reach the receiver.
+IP/hostname addressing remains available at the protocol/tool layer for diagnostics; the current PC GUI uses automatic discovery and has no manual address entry.
 
 ## Initial Wi-Fi provisioning over USB
 
