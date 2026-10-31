@@ -32,7 +32,7 @@ static int receiving=-1;
 static bool authenticated, touchArmed;
 static bool paused=false,menuContact=false;
 static bool pauseReady=false;
-static uint32_t pauseSerial=0;
+static uint32_t pauseSerial=0,activeOptions=0;
 static bool physicalDown=false;
 static uint32_t authRequest=0;
 static char authHost[33]={};
@@ -178,7 +178,7 @@ void loop() {
         uint8_t reply[68];
         if (!lan::authorizeRequest(authHost,authRequest)||!pairing::authenticate(header,reply) || client.write(reply,sizeof(reply))!=sizeof(reply)) disconnect();
         else {
-          authenticated=true;have=0;touchArmed=false;lan::streamStarted();performance::reset();performance::enable((lan::options()&2)!=0);
+          authenticated=true;activeOptions=lan::options();have=0;touchArmed=false;lan::streamStarted();performance::reset();performance::enable((lan::options()&2)!=0);
           sendEvent("RDY1",800,480,config::MaxJpeg);
         }
       }
@@ -229,12 +229,21 @@ void loop() {
     }
   }
   const auto action=ui::takeAction();
-  if(action==ui::Action::Resume&&authenticated){ui::invalidate();paused=pauseReady=false;lan::setLocalPause(false);touchArmed=false;performance::reset();sendEvent("PAU3",0,pauseSerial,0);}
+  if(action==ui::Action::Resume&&authenticated){
+    const uint32_t nextOptions=lan::options(),changed=nextOptions^activeOptions;
+    if(changed&~3UL){
+      sendEvent("BYE3",0,0,0);lan::cancelPlay();disconnect();ui::connecting(lan::requestPlay(lan::selectedId()));
+    }else{
+      if(changed&1)sendEvent("MOD3",nextOptions&1,0,0);
+      if(authenticated&&(changed&2)){performance::enable((nextOptions&2)!=0);sendEvent("OVR3",(nextOptions&2)?1:0,0,0);}
+      if(authenticated){activeOptions=nextOptions;ui::invalidate();paused=pauseReady=false;lan::setLocalPause(false);touchArmed=false;performance::reset();sendEvent("PAU3",0,pauseSerial,0);}
+    }
+  }
   else if(action==ui::Action::Disconnect){if(authenticated)sendEvent("BYE3",8,0,0);lan::cancelPlay();disconnect();ui::streamEnded();}
   else if(action==ui::Action::Reconnect){if(authenticated)sendEvent("BYE3",0,0,0);lan::cancelPlay();disconnect();ui::connecting(lan::requestPlay(lan::selectedId()));}
   else if(action==ui::Action::Key&&authenticated&&paused)sendEvent("KEY3",ui::actionValue(),0,0);
-  else if(action==ui::Action::Mode&&authenticated&&paused)sendEvent("MOD3",ui::actionValue(),0,0);
-  else if(action==ui::Action::Stats&&authenticated&&paused){performance::enable((lan::options()&2)!=0);sendEvent("OVR3",(lan::options()&2)?1:0,0,0);}
+  else if(action==ui::Action::Mode&&authenticated&&paused){activeOptions=(activeOptions&~1UL)|(lan::options()&1);sendEvent("MOD3",ui::actionValue(),0,0);}
+  else if(action==ui::Action::Stats&&authenticated&&paused){activeOptions=(activeOptions&~2UL)|(lan::options()&2);performance::enable((lan::options()&2)!=0);sendEvent("OVR3",(lan::options()&2)?1:0,0,0);}
   else if(action==ui::Action::Text&&authenticated&&paused){const char *value=ui::textValue();const size_t length=strlen(value);if(length&&length<=128&&sendEvent("TXT3",length,0,0))if(client.write((const uint8_t *)value,length)!=length)disconnect();}
   if (millis()-lastPrint>=2000) {
     Serial.printf("display=%.1f fps errors=%lu internal=%u psram=%u\n",

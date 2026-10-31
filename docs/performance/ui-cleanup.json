@@ -1,0 +1,21 @@
+{
+  "date": "2026-10-31",
+  "firmware_app_bytes": 1206832,
+  "firmware_build": "passed",
+  "artifact_check": "passed",
+  "application_flash": "COM17 hash verified",
+  "partitions_or_font_rewritten": false,
+  "host_tests": 70,
+  "host_source_gui_smoke": "passed",
+  "host_packaged_gui_smoke_exit": 0,
+  "host_window_visual_check": "main and runtime settings inspected",
+  "device_observation": "streaming frames observed; reported errors zero during brief log sample",
+  "user_acceptance": "passed: menu layout, save/return, resume desktop and PC layout confirmed by user",
+  "standard_performance_benchmark": "not run",
+  "baseline_commits": {
+    "firmware": "d28873c",
+    "host": "f242780"
+  },
+  "title_followup": "Chinese title ASCII-only fallback corrected; existing CJK glyphs scaled 1.5x; build, artifact and glyph decode checks passed",
+  "title_user_acceptance": "passed: user confirmed Chinese heading displayed normally"
+}

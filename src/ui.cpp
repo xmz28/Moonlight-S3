@@ -55,7 +55,7 @@ uint32_t nextChar(const char *&s) {
   return code;
 }
 int glyph(uint32_t code,bool title) {
-  if (title) return code>=32 && code<=126?code-32:'?'-32;
+  if (title && code>=32 && code<=126) return code-32;
   int base=95;
   constexpr uint32_t ranges[][2]={{32,126},{160,255},{0x3000,0x303f},{0x4e00,0x9fff},{0xff01,0xff60},{0x25a1,0x25a1}};
   for (auto &r:ranges) { if (code>=r[0] && code<=r[1]) return base+code-r[0]; base+=r[1]-r[0]+1; }
@@ -75,7 +75,10 @@ GlyphInfo glyphInfo(int g) {
 }
 int textWidth(const char *s,bool title=false) {
   int w=0;
-  while (*s) w+=glyphInfo(glyph(nextChar(s),title)).advance;
+  while (*s) {
+    const int g=glyph(nextChar(s),title),advance=glyphInfo(g).advance;
+    w+=title&&g>=95?advance*3/2:advance;
+  }
   return w;
 }
 void rectangle(int x,int y,int w,int h,uint16_t color) {
@@ -89,10 +92,13 @@ uint16_t blend(uint16_t a,uint16_t b,int alpha) {
     (((a&31)*alpha+(b&31)*(3-alpha))/3);
 }
 void text(int x,int y,const char *s,uint16_t color=White,bool title=false,int right=776) {
-  const int width=title?40:24,height=title?44:30;
   while (*s) {
     const int g=glyph(nextChar(s),title);
-    const GlyphInfo info=glyphInfo(g);const int advance=info.advance;
+    // Large bitmap glyphs cover ASCII only. Scale the existing CJK glyphs
+    // for headings instead of substituting '?'; the flash font stays unchanged.
+    const int width=g<95?40:24,height=g<95?44:30;
+    const int scale=title&&g>=95?3:2;
+    const GlyphInfo info=glyphInfo(g);const int advance=info.advance*scale/2;
     if (x+advance>right) break;
     const size_t size=info.end-info.start;
     if (!size || esp_partition_read(fontPartition,info.start,glyphBitmap,size)!=ESP_OK) { x+=advance;continue; }
@@ -102,9 +108,12 @@ void text(int x,int y,const char *s,uint16_t color=White,bool title=false,int ri
       const uint8_t packed=*p++;
       if (!packed) { if (p>=end) break; pixel+=int(*p++)*4;continue; }
       for (int i=0;i<4;++i,++pixel) {
-        const int alpha=(packed>>(6-i*2))&3,xx=x+pixel%width,yy=y+pixel/width;
-        if (alpha && xx>=0 && xx<right && yy>=0 && yy<480)
-          canvas[yy*800+xx]=blend(color,canvas[yy*800+xx],alpha);
+        const int alpha=(packed>>(6-i*2))&3;
+        if (!alpha) continue;
+        const int px=pixel%width,py=pixel/width;
+        for(int yy=y+py*scale/2;yy<y+(py+1)*scale/2 && yy<480;++yy)
+          for(int xx=x+px*scale/2;xx<x+(px+1)*scale/2 && xx<right;++xx)
+            if(xx>=0 && yy>=0)canvas[yy*800+xx]=blend(color,canvas[yy*800+xx],alpha);
       }
     }
     x+=advance;
@@ -215,25 +224,27 @@ void draw() {
     text(48,220,"原有配对和电脑桌面会保留",Muted);
     button(24,364,200,58,"重新连接",true);button(248,364,200,58,"返回列表");
   } else if(page==Page::Menu){
-    heading("Stream menu","本地菜单 · 投屏暂停，电脑上的程序继续运行");button(656,24,120,52,"继续");
-    button(24,122,176,58,"输入文字");button(216,122,176,58,(lan::options()&1)?"切换直接触摸":"切换触摸板");button(408,122,176,58,"电脑设置");button(600,122,176,58,(lan::options()&2)?"浮窗：开启":"浮窗：关闭");
+    heading("串流菜单",notice.length()?notice.c_str():"投屏暂停，电脑上的程序继续运行");button(592,24,184,52,"继续桌面",true);
+    text(24,102,"输入",Muted);text(408,102,"画面与设置",Muted);
+    button(24,138,176,54,"输入文字");button(216,138,176,54,(lan::options()&1)?"切换直接触摸":"切换触摸板");button(408,138,176,54,"串流设置");button(600,138,176,54,(lan::options()&2)?"浮窗：开启":"浮窗：关闭");
+    text(24,204,"快捷键",Muted);
     const char *labels[]={"Esc","Enter","Tab","Backspace","Ctrl+C","Ctrl+V","Ctrl+A","Alt+Tab"};
-    for(int i=0;i<8;++i)button(24+(i%4)*192,222+(i/4)*66,176,54,labels[i]);
-    button(24,390,224,58,"断开并返回");button(272,390,244,58,"重新连接");button(540,390,236,58,"继续桌面",true);
+    for(int i=0;i<8;++i)button(24+(i%4)*192,240+(i/4)*56,176,48,labels[i]);
+    text(24,354,"连接",Muted);
+    button(24,390,360,58,"断开并返回");button(416,390,360,58,"重新连接");
   } else if(page==Page::Options){
-    heading("Computer settings","常用设置保存在这台 S3，按电脑分别记忆");button(656,24,120,52,"返回");
+    heading("串流设置","点击选项调整，保存后按电脑分别记忆");button(568,24,208,52,"保存并返回",true);
+    text(24,102,"画面",Muted);text(416,102,"操作与显示",Muted);
     char label[64];
-    button(24,130,360,54,(editedOptions&1)?"输入：单指触摸板":"输入：直接触摸");
-    snprintf(label,sizeof(label),"显示器：%lu",(editedOptions>>8)&15);button(416,130,360,54,label);
-    button(24,194,360,54,(editedOptions&16)?"画面：流畅 400×240":"画面：清晰 800×480");
-    button(416,194,360,54,(editedOptions&4)?"底栏：显示":"底栏：隐藏");
-    button(24,258,360,54,(editedOptions&8)?"操作权限：允许触控":"操作权限：仅观看");
-    snprintf(label,sizeof(label),"JPEG 质量：%lu",(editedOptions>>16)&255);button(416,258,360,54,label);
-    button(24,322,360,54,(editedOptions&2)?"性能浮窗：开启":"性能浮窗：关闭");
-    snprintf(label,sizeof(label),"目标帧率：%lu FPS",(editedOptions>>24)&63);button(416,322,360,54,label);
-    button(24,406,360,54,optionsFromMenu?"保存并重新连接":"保存并返回",true);
-    if(notice.length())text(24,98,notice.c_str(),Accent);
-    text(416,418,"单指长按右键，无需双指",Muted);
+    snprintf(label,sizeof(label),"显示器：%lu",(editedOptions>>8)&15);button(24,140,360,54,label);
+    button(24,204,360,54,(editedOptions&16)?"画面：流畅 400×240":"画面：清晰 800×480");
+    snprintf(label,sizeof(label),"JPEG 质量：%lu",(editedOptions>>16)&255);button(24,268,360,54,label);
+    snprintf(label,sizeof(label),"目标帧率：%lu FPS",(editedOptions>>24)&63);button(24,332,360,54,label);
+    button(416,140,360,54,(editedOptions&1)?"输入：单指触摸板":"输入：直接触摸");
+    button(416,204,360,54,(editedOptions&8)?"操作权限：允许触控":"操作权限：仅观看");
+    button(416,268,360,54,(editedOptions&4)?"底栏：显示":"底栏：隐藏");
+    button(416,332,360,54,(editedOptions&2)?"性能浮窗：开启":"性能浮窗：关闭");
+    text(24,414,notice.length()?notice.c_str():editedOptions!=lan::options(optionsHost)?"更改尚未保存":"单指长按右键，无需双指",Muted);
   } else if(page==Page::Forget){
     heading("Forget computer","仅删除授权，不会隐藏局域网里仍在线的电脑");
     text(36,138,forgetName,White);text(36,190,forgetHost,Muted);
@@ -303,7 +314,7 @@ bool active() { return page!=Page::Home && page!=Page::Pairing; }
 void invalidate() { dirty=true; }
 void streamEnded(){page=lan::playState()==lan::PlayState::Cancelled?Page::Home:Page::Result;dirty=true;}
 void connecting(bool accepted){page=accepted?Page::Pairing:Page::Result;dirty=true;}
-void openMenu(){page=Page::Menu;armed=false;wasDown=true;dirty=true;}
+void openMenu(){page=Page::Menu;notice="";armed=false;wasDown=true;dirty=true;}
 void openText(){openMenu();page=Page::Text;inputText[0]=0;symbols=uppercase=false;editingSsid=false;notice="";}
 bool localMenu(){return page==Page::Menu||page==Page::Text||(page==Page::Options&&optionsFromMenu);}
 Action takeAction(){auto a=pendingAction;pendingAction=Action::None;return a;}
@@ -350,26 +361,29 @@ void touch(const touch::State &t) {
     if(hit(656,24,120,52,t)||hit(248,364,200,58,t)){lan::cancelPlay();page=Page::Home;dirty=true;}
     else if(hit(24,364,200,58,t)){page=lan::requestPlay(lan::selectedId())?Page::Pairing:Page::Result;dirty=true;}
   } else if(page==Page::Menu){
-    if(hit(656,24,120,52,t)||hit(540,390,236,58,t)){pendingAction=Action::Resume;page=Page::Pairing;}
-    else if(hit(24,390,224,58,t)){pendingAction=Action::Disconnect;page=Page::Home;}
-    else if(hit(272,390,244,58,t)){pendingAction=Action::Reconnect;page=Page::Pairing;}
-    else if(hit(24,122,176,58,t)){page=Page::Text;inputText[0]=0;symbols=uppercase=false;editingSsid=false;notice=(lan::options()&8)?"":"仅观看模式，请在电脑设置允许触控";}
-    else if(hit(216,122,176,58,t)){uint32_t value=lan::options()^1;if(lan::saveOptions(lan::selectedId(),value)){actionNumber=value&1;pendingAction=Action::Mode;}}
-    else if(hit(408,122,176,58,t)){strlcpy(optionsHost,lan::selectedId(),33);editedOptions=lan::options();optionsFromMenu=true;page=Page::Options;notice="";}
-    else if(hit(600,122,176,58,t)){uint32_t value=lan::options()^2;if(lan::saveOptions(lan::selectedId(),value))pendingAction=Action::Stats;}
-    else for(int i=0;i<8;++i)if((lan::options()&8)&&hit(24+(i%4)*192,222+(i/4)*66,176,54,t)){actionNumber=i;pendingAction=Action::Key;}
+    if(hit(592,24,184,52,t)){pendingAction=Action::Resume;page=Page::Pairing;}
+    else if(hit(24,390,360,58,t)){pendingAction=Action::Disconnect;page=Page::Home;}
+    else if(hit(416,390,360,58,t)){pendingAction=Action::Reconnect;page=Page::Pairing;}
+    else if(hit(24,138,176,54,t)){page=Page::Text;inputText[0]=0;symbols=uppercase=false;editingSsid=false;notice=(lan::options()&8)?"":"仅观看模式，请在串流设置允许触控";}
+    else if(hit(216,138,176,54,t)){uint32_t value=lan::options()^1;if(lan::saveOptions(lan::selectedId(),value)){actionNumber=value&1;pendingAction=Action::Mode;}}
+    else if(hit(408,138,176,54,t)){strlcpy(optionsHost,lan::selectedId(),33);editedOptions=lan::options();optionsFromMenu=true;page=Page::Options;notice="";}
+    else if(hit(600,138,176,54,t)){uint32_t value=lan::options()^2;if(lan::saveOptions(lan::selectedId(),value))pendingAction=Action::Stats;}
+    else for(int i=0;i<8;++i)if((lan::options()&8)&&hit(24+(i%4)*192,240+(i/4)*56,176,48,t)){actionNumber=i;pendingAction=Action::Key;}
     dirty=true;
   } else if(page==Page::Options){
-    if(hit(656,24,120,52,t)){page=optionsFromMenu?Page::Menu:Page::Home;}
-    else if(hit(24,130,360,54,t))editedOptions^=1;
-    else if(hit(416,130,360,54,t)){uint32_t monitor=((editedOptions>>8)&15)+1,maxMonitors=1;for(int i=0;i<lan::computerCount();++i){lan::Computer c;if(lan::computer(i,c)&&!strcmp(c.id,optionsHost))maxMonitors=c.monitors;}if(monitor>maxMonitors)monitor=1;editedOptions=(editedOptions&~(15UL<<8))|(monitor<<8);}
-    else if(hit(24,194,360,54,t))editedOptions^=16;
-    else if(hit(416,194,360,54,t))editedOptions^=4;
-    else if(hit(24,258,360,54,t))editedOptions^=8;
-    else if(hit(416,258,360,54,t)){uint32_t quality=((editedOptions>>16)&255)+20;if(quality>80)quality=40;editedOptions=(editedOptions&~(255UL<<16))|(quality<<16);}
-    else if(hit(24,322,360,54,t))editedOptions^=2;
-    else if(hit(416,322,360,54,t)){uint32_t fps=((editedOptions>>24)&63)+5;if(fps>30)fps=10;editedOptions=(editedOptions&~(63UL<<24))|(fps<<24);}
-    else if(hit(24,406,360,54,t)){if(lan::saveOptions(optionsHost,editedOptions)){if(optionsFromMenu){pendingAction=Action::Reconnect;page=Page::Pairing;}else page=Page::Home;}else notice="设置保存失败，请重试";}
+    if(hit(568,24,208,52,t)){
+      if(editedOptions==lan::options(optionsHost)||lan::saveOptions(optionsHost,editedOptions)){
+        page=optionsFromMenu?Page::Menu:Page::Home;notice=optionsFromMenu?"设置已保存，继续桌面后生效":"";
+      }else notice="设置保存失败，请重试";
+    }
+    else if(hit(24,140,360,54,t)){uint32_t monitor=((editedOptions>>8)&15)+1,maxMonitors=1;for(int i=0;i<lan::computerCount();++i){lan::Computer c;if(lan::computer(i,c)&&!strcmp(c.id,optionsHost))maxMonitors=c.monitors;}if(monitor>maxMonitors)monitor=1;editedOptions=(editedOptions&~(15UL<<8))|(monitor<<8);}
+    else if(hit(24,204,360,54,t))editedOptions^=16;
+    else if(hit(24,268,360,54,t)){uint32_t quality=((editedOptions>>16)&255)+20;if(quality>80)quality=40;editedOptions=(editedOptions&~(255UL<<16))|(quality<<16);}
+    else if(hit(24,332,360,54,t)){uint32_t fps=((editedOptions>>24)&63)+5;if(fps>30)fps=10;editedOptions=(editedOptions&~(63UL<<24))|(fps<<24);}
+    else if(hit(416,140,360,54,t))editedOptions^=1;
+    else if(hit(416,204,360,54,t))editedOptions^=8;
+    else if(hit(416,268,360,54,t))editedOptions^=4;
+    else if(hit(416,332,360,54,t))editedOptions^=2;
     dirty=true;
   } else if(page==Page::Forget){
     if(hit(408,390,368,58,t)){page=Page::Paired;notice="";}
