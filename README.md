@@ -1,5 +1,13 @@
 # Moonlight S3 — ESP32-S3 触屏 JPEG 云桌面
 
+## 免编译下载（v0.1.0）
+
+[下载最新固件（Latest）](https://github.com/xmz28/Moonlight-S3/releases/latest) · [配套 Windows 软件（Latest）](https://github.com/xmz28/Moonlight-S3-Host/releases/latest)
+
+新设备或恢复出厂选 `Moonlight-S3-v0.1.0-first-install.zip`；已有本项目固件并希望保留配置选 `Moonlight-S3-v0.1.0-update.zip`。压缩包内附中文烧录说明、源码信息及校验文件，无需安装 PlatformIO 或重新编译。请下载 Release 的附件，不要把 GitHub 自动生成的 Source code 当作固件。
+
+仅支持本工程的 ESP32-S3-N16R8、800×480 RGB565/GT911 接线，不能直接用于任意 S3 屏幕。烧录偏移和升级要求见 [免编译安装说明](docs/INSTALL.zh-CN.md)。本次二进制未重新烧录验收，功能及画面沿用已记录的实机基线，构建、镜像和软件检查单独验证。
+
 本仓库为 [Moonlight-S3](https://github.com/xmz28/Moonlight-S3) ESP32-S3 接收端；配套 Windows 软件与源码见 [Moonlight-S3-Host](https://github.com/xmz28/Moonlight-S3-Host)。
 两个项目可以放在任意目录，固件构建无需下载电脑端。发布准备见 [双仓库与发布说明](docs/RELEASING.md)。
 
