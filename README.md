@@ -1,5 +1,9 @@
 # Moonlight S3 — ESP32-S3 触屏 JPEG 云桌面
 
+[![platform: ESP32-S3](https://img.shields.io/badge/platform-ESP32--S3-blue)](#硬件与接线) [![Release](https://img.shields.io/github/v/release/xmz28/Moonlight-S3?label=release)](https://github.com/xmz28/Moonlight-S3/releases/latest)
+
+[配套 Windows 电脑端](https://github.com/xmz28/Moonlight-S3-Host)
+
 ## 免编译下载（v0.1.0）
 
 [下载最新固件（Latest）](https://github.com/xmz28/Moonlight-S3/releases/latest) · [配套 Windows 软件（Latest）](https://github.com/xmz28/Moonlight-S3-Host/releases/latest)
